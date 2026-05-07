@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SubTool</string>
+
+    <!-- Toolbar / Navigation -->
+    <string name="title_history">Lịch sử</string>
+    <string name="audio_file">File âm thanh</string>
+    <string name="media_type">Loại media</string>
+
+    <!-- Player controls -->
+    <string name="action_play">Phát</string>
+    <string name="action_pause">Tạm dừng</string>
+    <string name="action_rewind">Tua lại 5s</string>
+    <string name="action_forward">Tua tới 5s</string>
+
+    <!-- Action chips -->
+    <string name="action_set_start">Bắt đầu</string>
+    <string name="action_set_end">Kết thúc</string>
+    <string name="action_set_start_at">Bắt đầu: %s</string>
+    <string name="action_speed">Tốc độ</string>
+    <string name="action_loop">Lặp</string>
+    <string name="action_loop_range">Lặp đoạn</string>
+    <string name="action_loop_infinite">Lặp ∞</string>
+    <string name="action_loop_range_infinite">Đoạn ∞</string>
+    <string name="action_loop_all">Lặp tất cả</string>
+
+    <!-- Trim -->
+    <string name="trim_section_title">CẮT ĐOẠN</string>
+    <string name="action_trim_start">Trim bắt đầu</string>
+    <string name="action_trim_end">Trim kết thúc</string>
+    <string name="action_trim_reset">Reset trim</string>
+    <string name="trim_start_set">Trim bắt đầu: %s</string>
+    <string name="trim_end_set">Trim kết thúc: %s</string>
+    <string name="trim_end_before_start">Trim kết thúc phải sau trim bắt đầu</string>
+    <string name="trim_reset">Đã reset trim</string>
+
+    <!-- Bottom actions -->
+    <string name="action_open_file">Mở file</string>
+    <string name="action_paste_sub">Dán sub</string>
+    <string name="action_add_line">Thêm dòng</string>
+    <string name="action_import_text">Nhập text</string>
+    <string name="action_import_srt">Nhập SRT</string>
+    <string name="action_export_srt">Xuất SRT</string>
+    <string name="action_share">Chia sẻ</string>
+
+    <!-- Common actions -->
+    <string name="action_confirm">Xác nhận</string>
+    <string name="action_cancel">Hủy</string>
+    <string name="action_save">Lưu</string>
+    <string name="action_delete">Xóa</string>
+    <string name="action_add">Thêm</string>
+
+    <!-- Set start/end -->
+    <string name="start_set_at">Bắt đầu tại: %s</string>
+    <string name="set_start_first">Hãy chọn vị trí bắt đầu trước</string>
+    <string name="end_before_start">Vị trí kết thúc phải sau vị trí bắt đầu</string>
+
+    <!-- Sub pool / Bulk paste -->
+    <string name="paste_sub_title">Dán toàn bộ sub</string>
+    <string name="paste_sub_hint">Dán tất cả câu sub vào đây (mỗi dòng = 1 câu)…</string>
+    <string name="paste_sub_empty">Không có câu sub nào</string>
+    <string name="paste_sub_loaded">Đã tải %d câu sub vào pool</string>
+    <string name="pick_from_pool">Chọn câu sub</string>
+    <string name="no_line_selected">Chưa chọn câu nào</string>
+    <string name="select_consecutive">Hãy chọn các câu liên tiếp</string>
+    <string name="pool_completed">Đã gán hết sub pool!</string>
+
+    <!-- New subtitle -->
+    <string name="subtitle_text_hint">Nhập nội dung sub…</string>
+    <string name="new_subtitle_title">Sub mới (%1$s → %2$s)</string>
+
+    <!-- Loop -->
+    <string name="loop_count_title">Số lần lặp</string>
+    <string name="loop_infinite">Lặp vô hạn ∞</string>
+    <string name="loop_custom">Tùy chỉnh…</string>
+    <string name="loop_custom_title">Nhập số lần lặp</string>
+    <string name="loop_off">Đã tắt lặp</string>
+    <string name="loop_finished">Đã lặp xong!</string>
+    <string name="loop_single_on">Đang lặp câu này</string>
+    <string name="loop_range_on">Đang lặp câu %1$d → %2$d</string>
+    <string name="loop_all_on">Đang lặp toàn bộ</string>
+    <string name="loop_badge">Lặp (%d)</string>
+    <string name="loop_range_badge">Đoạn (%d)</string>
+    <string name="loop_range_title">Lặp từ câu… đến câu…</string>
+    <string name="loop_range_from">Từ câu số:</string>
+    <string name="loop_range_to">Đến câu số:</string>
+    <string name="invalid_range">Phạm vi không hợp lệ</string>
+    <string name="invalid_number">Số không hợp lệ</string>
+    <string name="range_no_timestamp">Câu trong phạm vi chưa có thời gian</string>
+    <string name="line_no_timestamp">Câu này chưa có thời gian</string>
+
+    <!-- Line options -->
+    <string name="line_options_title">Câu %d</string>
+    <string name="option_edit_text">Sửa nội dung</string>
+    <string name="option_edit_timestamp">Sửa thời gian</string>
+    <string name="option_delete">Xóa dòng</string>
+    <string name="option_loop_this">Lặp câu này</string>
+    <string name="option_set_range_start">Đặt làm đầu đoạn lặp</string>
+
+    <!-- Edit -->
+    <string name="edit_text_title">Sửa nội dung sub</string>
+    <string name="edit_timestamp_title">Sửa thời gian (ms)</string>
+    <string name="start_ms_label">Bắt đầu (ms):</string>
+    <string name="end_ms_label">Kết thúc (ms):</string>
+    <string name="delete_line_confirm">Xóa dòng sub này?</string>
+    <string name="range_start_set">Đã đặt câu %d làm đầu đoạn lặp</string>
+
+    <!-- Import/Export -->
+    <string name="import_empty">File trống, không có dữ liệu</string>
+    <string name="import_success">Đã nhập %d câu sub</string>
+    <string name="import_failed">Lỗi khi nhập file</string>
+    <string name="import_srt_empty">File SRT trống hoặc không hợp lệ</string>
+    <string name="export_success">Đã xuất file SRT thành công</string>
+    <string name="export_failed">Lỗi khi xuất file SRT</string>
+    <string name="no_subtitles_to_export">Chưa có sub để xuất</string>
+    <string name="share_srt_title">Chia sẻ SRT</string>
+
+    <!-- History -->
+    <string name="history_empty">Chưa có file nào đã mở.</string>
+    <string name="status_completed">Đã hoàn thành SRT</string>
+
+    <!-- Errors -->
+    <string name="error_open_file">Không thể mở file này</string>
+    <string name="error_no_media">Hãy mở file media trước</string>
+</resources>
