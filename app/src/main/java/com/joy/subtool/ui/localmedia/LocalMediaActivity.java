@@ -299,10 +299,13 @@ public class LocalMediaActivity extends AppCompatActivity {
             // Extract waveform in background
             if (!isVideo) {
                 waveformView.setAmplitudes(null);
+                final Uri extractUri = uri;
                 WaveformExtractor.extract(this, uri, new WaveformExtractor.Callback() {
                     @Override
                     public void onWaveformReady(float[] amplitudes) {
-                        waveformView.setAmplitudes(amplitudes);
+                        if (extractUri.equals(currentFileUri)) {
+                            waveformView.setAmplitudes(amplitudes);
+                        }
                     }
                     @Override
                     public void onError(Exception e) {
