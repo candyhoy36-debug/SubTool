@@ -56,6 +56,7 @@ import java.util.List;
 public class LocalMediaActivity extends AppCompatActivity {
 
     private static final long TICK_MS = 250L;
+    private static final long TIME_ADJUST_STEP_MS = 500L;
 
     // --- Player ---
     @Nullable private MediaPlayer mediaPlayer;
@@ -930,6 +931,25 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         subtitleAdapter.setOnLineLongClickListener((position, line) -> {
             showLineOptionsDialog(position, line);
+        });
+
+        subtitleAdapter.setOnTimeAdjustListener(new LocalSubtitleAdapter.OnTimeAdjustListener() {
+            @Override
+            public void onDecreaseStart(int position, SubtitleLine line) {
+                long newStart = Math.max(0, line.startMs - TIME_ADJUST_STEP_MS);
+                line.startMs = newStart;
+                subtitleAdapter.notifyItemChanged(position);
+                autoSaveSubtitles();
+            }
+
+            @Override
+            public void onIncreaseEnd(int position, SubtitleLine line) {
+                long maxEnd = mediaDuration > 0 ? mediaDuration : Long.MAX_VALUE;
+                long newEnd = Math.min(maxEnd, line.endMs + TIME_ADJUST_STEP_MS);
+                line.endMs = newEnd;
+                subtitleAdapter.notifyItemChanged(position);
+                autoSaveSubtitles();
+            }
         });
     }
 

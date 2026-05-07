@@ -27,6 +27,11 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
         void onLongClick(int position, SubtitleLine line);
     }
 
+    public interface OnTimeAdjustListener {
+        void onDecreaseStart(int position, SubtitleLine line);
+        void onIncreaseEnd(int position, SubtitleLine line);
+    }
+
     private List<SubtitleLine> lines = new ArrayList<>();
     private int activeIndex = -1;
     private int loopStartIndex = -1;
@@ -35,6 +40,8 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
     private OnLineClickListener clickListener;
     @Nullable
     private OnLineLongClickListener longClickListener;
+    @Nullable
+    private OnTimeAdjustListener timeAdjustListener;
 
     public void setLines(List<SubtitleLine> newLines) {
         this.lines = newLines != null ? newLines : new ArrayList<>();
@@ -81,6 +88,10 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
         this.longClickListener = listener;
     }
 
+    public void setOnTimeAdjustListener(@Nullable OnTimeAdjustListener listener) {
+        this.timeAdjustListener = listener;
+    }
+
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
@@ -100,10 +111,21 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
             holder.tvTime.setText(
                     TimeFormatter.format(line.startMs) + " - " + TimeFormatter.format(line.endMs));
             holder.tvTime.setVisibility(View.VISIBLE);
+            holder.btnMinus.setVisibility(View.VISIBLE);
+            holder.btnPlus.setVisibility(View.VISIBLE);
         } else {
             holder.tvTime.setText("--:-- - --:--");
             holder.tvTime.setVisibility(View.VISIBLE);
+            holder.btnMinus.setVisibility(View.GONE);
+            holder.btnPlus.setVisibility(View.GONE);
         }
+
+        holder.btnMinus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) timeAdjustListener.onDecreaseStart(position, line);
+        });
+        holder.btnPlus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) timeAdjustListener.onIncreaseEnd(position, line);
+        });
 
         boolean isActive = position == activeIndex;
         boolean isInLoopRange = loopStartIndex >= 0 && loopEndIndex >= 0
@@ -138,12 +160,16 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
         final TextView tvIndex;
         final TextView tvText;
         final TextView tvTime;
+        final TextView btnMinus;
+        final TextView btnPlus;
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             tvIndex = itemView.findViewById(R.id.tv_index);
             tvText = itemView.findViewById(R.id.tv_text);
             tvTime = itemView.findViewById(R.id.tv_time);
+            btnMinus = itemView.findViewById(R.id.btn_minus);
+            btnPlus = itemView.findViewById(R.id.btn_plus);
         }
     }
 }
