@@ -608,8 +608,14 @@ public class LocalMediaActivity extends AppCompatActivity {
     }
 
     private void showSubPoolPicker(long startMs, long endMs) {
+        // Show only unused entries
+        List<SubPoolAdapter.PoolEntry> available = new ArrayList<>();
+        for (SubPoolAdapter.PoolEntry e : subPool) {
+            if (!e.used) available.add(e);
+        }
+
         SubPoolAdapter poolAdapter = new SubPoolAdapter();
-        poolAdapter.setEntries(new ArrayList<>(subPool));
+        poolAdapter.setEntries(available);
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
@@ -643,14 +649,22 @@ public class LocalMediaActivity extends AppCompatActivity {
                     subtitleLines.add(newLine);
                     subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
 
-                    // Remove used entries from pool
+                    // Mark used entries (hide, not delete)
                     for (SubPoolAdapter.PoolEntry entry : selected) {
-                        subPool.removeIf(e -> e.originalIndex == entry.originalIndex);
+                        for (SubPoolAdapter.PoolEntry poolEntry : subPool) {
+                            if (poolEntry.originalIndex == entry.originalIndex) {
+                                poolEntry.used = true;
+                            }
+                        }
                     }
 
                     autoSaveSubtitles();
 
-                    if (subPool.isEmpty()) {
+                    boolean allUsed = true;
+                    for (SubPoolAdapter.PoolEntry e : subPool) {
+                        if (!e.used) { allUsed = false; break; }
+                    }
+                    if (allUsed) {
                         Toast.makeText(this, R.string.pool_completed, Toast.LENGTH_SHORT).show();
                     }
                 })
@@ -1042,12 +1056,24 @@ public class LocalMediaActivity extends AppCompatActivity {
         new AlertDialog.Builder(this)
                 .setMessage(R.string.delete_line_confirm)
                 .setPositiveButton(R.string.action_delete, (d, w) -> {
-                    subtitleLines.remove(position);
+                    SubtitleLine removed = subtitleLines.remove(position);
                     subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
                     autoSaveSubtitles();
+
+                    // Restore matching pool entries so user can re-pick them
+                    restorePoolEntries(removed.text);
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
+    }
+
+    private void restorePoolEntries(String deletedText) {
+        if (subPool.isEmpty() || deletedText == null) return;
+        for (SubPoolAdapter.PoolEntry entry : subPool) {
+            if (entry.used && deletedText.contains(entry.text)) {
+                entry.used = false;
+            }
+        }
     }
 
     // ======================== BOTTOM ACTIONS ========================
