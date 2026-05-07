@@ -36,26 +36,30 @@
     <LinearLayout
         android:id="@+id/audio_placeholder"
         android:layout_width="match_parent"
-        android:layout_height="120dp"
+        android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:gravity="center"
         android:background="@color/surface"
         android:visibility="gone">
-
-        <ImageView
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:src="@drawable/ic_audio"
-            android:contentDescription="@string/audio_file"
-            app:tint="@color/brand_primary" />
 
         <TextView
             android:id="@+id/tv_audio_file_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
             android:layout_marginTop="8dp"
+            android:drawableStart="@drawable/ic_audio"
+            android:drawablePadding="6dp"
+            android:drawableTint="@color/brand_primary"
             android:textColor="@color/text_primary"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
+
+        <com.joy.subtool.ui.localmedia.WaveformView
+            android:id="@+id/waveform_view"
+            android:layout_width="match_parent"
+            android:layout_height="100dp"
+            android:layout_marginHorizontal="12dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp" />
     </LinearLayout>
 
     <!-- Seekbar + time -->

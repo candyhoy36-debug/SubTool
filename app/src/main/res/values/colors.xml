@@ -16,4 +16,8 @@
     <color name="chip_bg_active">#FFE3F2FD</color>
     <color name="chip_text">#FF424242</color>
     <color name="chip_text_active">#FF1976D2</color>
+
+    <color name="waveform_played">#FF5C6BC0</color>
+    <color name="waveform_unplayed">#FFB0BEC5</color>
+    <color name="waveform_center_line">#FFE0E0E0</color>
 </resources>

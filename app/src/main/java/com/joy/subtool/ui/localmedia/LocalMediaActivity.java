@@ -44,6 +44,7 @@ import com.joy.subtool.model.SubtitleLine;
 import com.joy.subtool.util.SrtExporter;
 import com.joy.subtool.util.SrtParser;
 import com.joy.subtool.util.TimeFormatter;
+import com.joy.subtool.util.WaveformExtractor;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -61,6 +62,7 @@ public class LocalMediaActivity extends AppCompatActivity {
     private SurfaceView surfaceView;
     private FrameLayout videoContainer;
     private View audioPlaceholder;
+    private WaveformView waveformView;
     private SeekBar seekBar;
     private TextView tvCurrentTime;
     private TextView tvTotalTime;
@@ -188,9 +190,24 @@ public class LocalMediaActivity extends AppCompatActivity {
         btnRewind = findViewById(R.id.btn_rewind);
         btnForward = findViewById(R.id.btn_forward);
 
+        waveformView = findViewById(R.id.waveform_view);
+
         btnPlayPause.setOnClickListener(v -> togglePlayPause());
         btnRewind.setOnClickListener(v -> seekRelative(-5000));
         btnForward.setOnClickListener(v -> seekRelative(5000));
+
+        waveformView.setOnSeekListener(fraction -> {
+            if (mediaPlayer == null) return;
+            int target = (int) (fraction * mediaDuration);
+            if (trimEnabled) {
+                target = Math.max((int) trimStartMs, Math.min(target, (int) trimEndMs));
+            }
+            try {
+                mediaPlayer.seekTo(target);
+                seekBar.setProgress(target);
+                tvCurrentTime.setText(TimeFormatter.format(target));
+            } catch (IllegalStateException ignored) {}
+        });
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
@@ -279,6 +296,21 @@ public class LocalMediaActivity extends AppCompatActivity {
             mediaPlayer.start();
             btnPlayPause.setImageResource(R.drawable.ic_pause);
 
+            // Extract waveform in background
+            if (!isVideo) {
+                waveformView.setAmplitudes(null);
+                WaveformExtractor.extract(this, uri, new WaveformExtractor.Callback() {
+                    @Override
+                    public void onWaveformReady(float[] amplitudes) {
+                        waveformView.setAmplitudes(amplitudes);
+                    }
+                    @Override
+                    public void onError(Exception e) {
+                        // Waveform extraction failed silently
+                    }
+                });
+            }
+
             recordHistory(uri);
             loadSavedSubtitles(uri);
         } catch (Exception e) {
@@ -365,6 +397,9 @@ public class LocalMediaActivity extends AppCompatActivity {
         if (!userSeeking) {
             seekBar.setProgress(pos);
             tvCurrentTime.setText(TimeFormatter.format(pos));
+            if (mediaDuration > 0) {
+                waveformView.setProgress((float) pos / mediaDuration);
+            }
         }
 
         updateActiveSubtitle(pos);
