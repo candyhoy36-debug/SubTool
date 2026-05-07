@@ -318,7 +318,12 @@ public class LocalMediaActivity extends AppCompatActivity {
 
     private void onTick() {
         if (mediaPlayer == null) return;
-        int pos = mediaPlayer.getCurrentPosition();
+        int pos;
+        try {
+            pos = mediaPlayer.getCurrentPosition();
+        } catch (IllegalStateException e) {
+            return;
+        }
 
         // Enforce trim bounds
         if (trimEnabled && pos >= trimEndMs) {
@@ -326,8 +331,10 @@ public class LocalMediaActivity extends AppCompatActivity {
                 handleLoopRepeat((int) trimStartMs);
                 return;
             }
-            mediaPlayer.seekTo((int) trimStartMs);
-            mediaPlayer.pause();
+            try {
+                mediaPlayer.seekTo((int) trimStartMs);
+                mediaPlayer.pause();
+            } catch (IllegalStateException ignored) {}
             btnPlayPause.setImageResource(R.drawable.ic_play);
             return;
         }
@@ -369,7 +376,9 @@ public class LocalMediaActivity extends AppCompatActivity {
             if (loopRemaining <= 0) {
                 clearLoop();
                 if (mediaPlayer != null) {
-                    mediaPlayer.pause();
+                    try {
+                        mediaPlayer.pause();
+                    } catch (IllegalStateException ignored) {}
                     btnPlayPause.setImageResource(R.drawable.ic_play);
                 }
                 Toast.makeText(this, R.string.loop_finished, Toast.LENGTH_SHORT).show();
@@ -378,7 +387,9 @@ public class LocalMediaActivity extends AppCompatActivity {
             updateLoopBadge();
         }
         if (mediaPlayer != null) {
-            mediaPlayer.seekTo(seekToMs);
+            try {
+                mediaPlayer.seekTo(seekToMs);
+            } catch (IllegalStateException ignored) {}
         }
     }
 
@@ -387,15 +398,23 @@ public class LocalMediaActivity extends AppCompatActivity {
             int seekTo = trimEnabled ? (int) trimStartMs : 0;
             handleLoopRepeat(seekTo);
             if (mediaPlayer != null && loopMode == LoopMode.ALL) {
-                mediaPlayer.start();
-                applyPlaybackSpeed();
+                try {
+                    mediaPlayer.seekTo(seekTo);
+                    mediaPlayer.start();
+                    applyPlaybackSpeed();
+                } catch (IllegalStateException ignored) {
+                    btnPlayPause.setImageResource(R.drawable.ic_play);
+                }
             }
             return;
         }
         btnPlayPause.setImageResource(R.drawable.ic_play);
+        seekBar.setProgress((int) mediaDuration);
+        tvCurrentTime.setText(TimeFormatter.format(mediaDuration));
     }
 
     private void updateActiveSubtitle(int posMs) {
+        if (subtitleLines.isEmpty()) return;
         int newActive = -1;
         for (int i = 0; i < subtitleLines.size(); i++) {
             if (subtitleLines.get(i).contains(posMs)) {
@@ -403,16 +422,9 @@ public class LocalMediaActivity extends AppCompatActivity {
                 break;
             }
         }
-        if (newActive != subtitleAdapter.getLines().indexOf(subtitleLines.get(
-                Math.max(0, newActive >= 0 ? newActive : 0)))) {
-            // simplified: just use newActive directly
-        }
         if (newActive >= 0 && newActive != selectedLineIndex) {
-            int old = selectedLineIndex;
             subtitleAdapter.setActiveIndex(newActive);
-            if (newActive >= 0) {
-                layoutManager.scrollToPositionWithOffset(newActive, 100);
-            }
+            layoutManager.scrollToPositionWithOffset(newActive, 100);
         }
     }
 
