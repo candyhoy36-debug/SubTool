@@ -640,7 +640,7 @@ public class LocalMediaActivity extends AppCompatActivity {
         PopupMenu popup = new PopupMenu(this, btnSpeed);
         float[] speeds = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
         for (float s : speeds) {
-            String label = s == 1.0f ? "1x" : String.format("%.2fx", s).replaceAll("0+$", "").replaceAll("\\.$", "");
+            String label = s == 1.0f ? "1x" : String.format(java.util.Locale.US, "%.2fx", s).replaceAll("0+$", "").replaceAll("\\.$", "");
             popup.getMenu().add(label).setOnMenuItemClickListener(item -> {
                 playbackSpeed = s;
                 applyPlaybackSpeed();
