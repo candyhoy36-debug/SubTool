@@ -34,11 +34,16 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.slider.RangeSlider;
 import com.joy.subtool.R;
+import com.joy.subtool.ui.SettingsActivity;
+import com.joy.subtool.util.AppPrefs;
 import com.joy.subtool.SubToolApp;
 import com.joy.subtool.data.LocalMediaHistoryDao;
 import com.joy.subtool.data.LocalMediaHistoryEntity;
@@ -78,13 +83,17 @@ public class LocalMediaActivity extends AppCompatActivity {
     private boolean userSeeking = false;
 
     // --- Trim ---
-    private SeekBar trimBar;
+    private RangeSlider trimRangeSlider;
     private TextView tvTrimStart;
     private TextView tvTrimEnd;
     private View trimContainer;
     private long trimStartMs = 0;
     private long trimEndMs = Long.MAX_VALUE;
     private boolean trimEnabled = false;
+    /** True while we're updating the RangeSlider programmatically — prevents
+     *  the addOnChangeListener from re-clobbering trimStartMs/trimEndMs that
+     *  we just set in code. */
+    private boolean syncingTrimSlider = false;
 
     // --- Subtitle list ---
     private RecyclerView rvSubtitles;
@@ -116,6 +125,17 @@ public class LocalMediaActivity extends AppCompatActivity {
     private TextView btnSpeed;
     private TextView btnLoop;
     private TextView btnLoopRange;
+    private TextView btnWaveMode;
+    private TextView btnConfirmWaveLine;
+
+    // --- Wave-tap mode (assign Start/End by tapping the audio waveform) ---
+    private enum WaveTapTarget { NONE, START, END }
+    private boolean waveTapMode = false;
+    private WaveTapTarget waveTapTarget = WaveTapTarget.NONE;
+    /** Scratch start/end picked via wave taps (-1 = not yet picked). They are
+     *  written to the selected line when the user presses Confirm. */
+    private long waveTapStartMs = -1;
+    private long waveTapEndMs = -1;
 
     // --- Current file ---
     @Nullable private Uri currentFileUri;
@@ -197,6 +217,10 @@ public class LocalMediaActivity extends AppCompatActivity {
                 startActivity(new Intent(this, LocalMediaHistoryActivity.class));
                 return true;
             }
+            if (id == R.id.action_settings) {
+                startActivity(new Intent(this, SettingsActivity.class));
+                return true;
+            }
             return false;
         });
     }
@@ -217,19 +241,26 @@ public class LocalMediaActivity extends AppCompatActivity {
         waveformView = findViewById(R.id.waveform_view);
 
         btnPlayPause.setOnClickListener(v -> togglePlayPause());
-        btnRewind.setOnClickListener(v -> seekRelative(-5000));
-        btnForward.setOnClickListener(v -> seekRelative(5000));
+        btnRewind.setOnClickListener(v -> seekRelative(-AppPrefs.getSkipStepMs(this)));
+        btnForward.setOnClickListener(v -> seekRelative(AppPrefs.getSkipStepMs(this)));
 
         waveformView.setOnSeekListener(fraction -> {
-            if (mediaPlayer == null) return;
+            if (mediaPlayer == null || mediaDuration <= 0) return;
             int target = (int) (fraction * mediaDuration);
             if (trimEnabled) {
                 target = Math.max((int) trimStartMs, Math.min(target, (int) trimEndMs));
+            }
+            // In wave-tap mode the next tap goes to the start/end picker; in
+            // every other case the tap behaves like a seek.
+            if (waveTapMode && waveTapTarget != WaveTapTarget.NONE) {
+                onWaveTap(target);
+                return;
             }
             try {
                 mediaPlayer.seekTo(target);
                 seekBar.setProgress(target);
                 tvCurrentTime.setText(TimeFormatter.format(target));
+                waveformView.setProgress((float) target / mediaDuration);
             } catch (IllegalStateException ignored) {}
         });
 
@@ -308,10 +339,13 @@ public class LocalMediaActivity extends AppCompatActivity {
             trimStartMs = 0;
             trimEndMs = mediaDuration;
             trimEnabled = false;
-            trimBar.setMax((int) mediaDuration);
-            trimBar.setProgress(0);
             tvTrimStart.setText(TimeFormatter.format(0));
             tvTrimEnd.setText(TimeFormatter.format(mediaDuration));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
+
+            // Reset wave-tap markers between files.
+            clearWaveTapState();
 
             applyPlaybackSpeed();
 
@@ -371,8 +405,17 @@ public class LocalMediaActivity extends AppCompatActivity {
         } else {
             target = Math.max(0, Math.min(target, (int) mediaDuration));
         }
-        mediaPlayer.seekTo(target);
+        try {
+            mediaPlayer.seekTo(target);
+        } catch (IllegalStateException ignored) {}
+        // Refresh the seekbar / waveform / time label here instead of relying on
+        // the periodic tick — when the player is paused the tick early-returns,
+        // so without this the UI looked frozen after tapping rewind/forward.
         tvCurrentTime.setText(TimeFormatter.format(target));
+        seekBar.setProgress(target);
+        if (mediaDuration > 0) {
+            waveformView.setProgress((float) target / mediaDuration);
+        }
     }
 
     private void onTick() {
@@ -520,18 +563,44 @@ public class LocalMediaActivity extends AppCompatActivity {
 
     private void bindTrim() {
         trimContainer = findViewById(R.id.trim_container);
-        trimBar = findViewById(R.id.trim_bar);
+        trimRangeSlider = findViewById(R.id.trim_range_slider);
         tvTrimStart = findViewById(R.id.tv_trim_start);
         tvTrimEnd = findViewById(R.id.tv_trim_end);
         TextView btnResetTrim = findViewById(R.id.btn_reset_trim);
         TextView btnSetTrimStart = findViewById(R.id.btn_set_trim_start);
         TextView btnSetTrimEnd = findViewById(R.id.btn_set_trim_end);
 
+        // Two thumbs on the slider give the user direct, accurate control over
+        // both trim_start and trim_end without needing the Set Start / Set End
+        // buttons. The buttons stay as a one-tap shortcut to set the value to
+        // the current playback position.
+        trimRangeSlider.addOnChangeListener((slider, value, fromUser) -> {
+            if (!fromUser || syncingTrimSlider) return;
+            List<Float> values = slider.getValues();
+            if (values.size() < 2) return;
+            long total = mediaDuration > 0 ? mediaDuration : 100L;
+            long start = (long) (values.get(0) / 100f * total);
+            long end = (long) (values.get(1) / 100f * total);
+            if (end <= start + 100) end = Math.min(total, start + 100);
+            trimStartMs = start;
+            trimEndMs = end;
+            trimEnabled = true;
+            tvTrimStart.setText(TimeFormatter.format(trimStartMs));
+            tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            updateWaveformTrimOverlay();
+        });
+
         btnSetTrimStart.setOnClickListener(v -> {
             if (mediaPlayer == null) return;
             trimStartMs = mediaPlayer.getCurrentPosition();
+            if (trimEndMs <= trimStartMs) {
+                trimEndMs = Math.min(mediaDuration, trimStartMs + 1000);
+            }
             trimEnabled = true;
             tvTrimStart.setText(TimeFormatter.format(trimStartMs));
+            tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, getString(R.string.trim_start_set, TimeFormatter.format(trimStartMs)),
                     Toast.LENGTH_SHORT).show();
         });
@@ -545,6 +614,8 @@ public class LocalMediaActivity extends AppCompatActivity {
             }
             trimEnabled = true;
             tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, getString(R.string.trim_end_set, TimeFormatter.format(trimEndMs)),
                     Toast.LENGTH_SHORT).show();
         });
@@ -555,8 +626,44 @@ public class LocalMediaActivity extends AppCompatActivity {
             trimEndMs = mediaDuration > 0 ? mediaDuration : Long.MAX_VALUE;
             tvTrimStart.setText(TimeFormatter.format(0));
             tvTrimEnd.setText(TimeFormatter.format(mediaDuration));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, R.string.trim_reset, Toast.LENGTH_SHORT).show();
         });
+    }
+
+    /** Pushes the current trimStartMs/trimEndMs values into the RangeSlider as
+     *  percentages of the media duration. Guarded by syncingTrimSlider so the
+     *  addOnChangeListener doesn't fight us. */
+    private void syncTrimSliderFromMs() {
+        syncingTrimSlider = true;
+        try {
+            if (mediaDuration <= 0) {
+                trimRangeSlider.setValues(0f, 100f);
+                return;
+            }
+            float startPct = Math.max(0f,
+                    Math.min(100f, 100f * trimStartMs / (float) mediaDuration));
+            float endPct = Math.max(startPct + 0.1f,
+                    Math.min(100f, 100f * trimEndMs / (float) mediaDuration));
+            try {
+                trimRangeSlider.setValues(startPct, endPct);
+            } catch (IllegalStateException ignored) {}
+        } finally {
+            syncingTrimSlider = false;
+        }
+    }
+
+    /** Mirrors the trim region onto the audio waveform so users can see exactly
+     *  which part of the file is kept. Hidden when trim is disabled. */
+    private void updateWaveformTrimOverlay() {
+        if (!trimEnabled || mediaDuration <= 0) {
+            waveformView.setTrimRegion(-1f, -1f);
+            return;
+        }
+        waveformView.setTrimRegion(
+                (float) trimStartMs / mediaDuration,
+                (float) trimEndMs / mediaDuration);
     }
 
     // ======================== ACTION BUTTONS ========================
@@ -567,12 +674,16 @@ public class LocalMediaActivity extends AppCompatActivity {
         btnSpeed = findViewById(R.id.btn_speed);
         btnLoop = findViewById(R.id.btn_loop);
         btnLoopRange = findViewById(R.id.btn_loop_range);
+        btnWaveMode = findViewById(R.id.btn_wave_mode);
+        btnConfirmWaveLine = findViewById(R.id.btn_confirm_wave_line);
 
         btnSetStart.setOnClickListener(v -> onSetStart());
         btnSetEnd.setOnClickListener(v -> onSetEnd());
         btnSpeed.setOnClickListener(v -> showSpeedMenu());
         btnLoop.setOnClickListener(v -> onLoopClicked());
         btnLoopRange.setOnClickListener(v -> onLoopRangeClicked());
+        btnWaveMode.setOnClickListener(v -> toggleWaveTapMode());
+        btnConfirmWaveLine.setOnClickListener(v -> confirmWaveTapLine());
     }
 
     private void onSetStart() {
@@ -590,6 +701,20 @@ public class LocalMediaActivity extends AppCompatActivity {
                 subtitleAdapter.setActiveIndex(autoIdx);
                 layoutManager.scrollToPositionWithOffset(autoIdx, 100);
             }
+        }
+        if (waveTapMode) {
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // Switch the next-tap target to START. Repeated taps on the
+            // waveform will keep updating the start until the user switches
+            // to END or hits Confirm.
+            waveTapTarget = WaveTapTarget.START;
+            btnSetStart.setSelected(true);
+            btnSetEnd.setSelected(false);
+            Toast.makeText(this, R.string.wave_mode_set_start, Toast.LENGTH_SHORT).show();
+            return;
         }
         long startMs = mediaPlayer.getCurrentPosition();
         // Store temporarily, wait for Set End
@@ -612,6 +737,16 @@ public class LocalMediaActivity extends AppCompatActivity {
     private void onSetEnd() {
         if (mediaPlayer == null) {
             Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapMode) {
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            waveTapTarget = WaveTapTarget.END;
+            btnSetEnd.setSelected(true);
+            Toast.makeText(this, R.string.wave_mode_set_end, Toast.LENGTH_SHORT).show();
             return;
         }
         Object startTag = btnSetStart.getTag();
@@ -1327,9 +1462,136 @@ public class LocalMediaActivity extends AppCompatActivity {
         }
     }
 
+    // ======================== WAVE-TAP MODE ========================
+
+    /** Routes a waveform tap (in ms) into the current Set-Start / Set-End
+     *  picker. Each tap overwrites the previously-picked value. */
+    private void onWaveTap(int posMs) {
+        if (mediaDuration <= 0) return;
+        if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapTarget == WaveTapTarget.START) {
+            waveTapStartMs = posMs;
+            waveformView.setStartMarker((float) posMs / mediaDuration);
+            Toast.makeText(this, getString(R.string.wave_mode_start_at,
+                    TimeFormatter.format(posMs)), Toast.LENGTH_SHORT).show();
+        } else if (waveTapTarget == WaveTapTarget.END) {
+            waveTapEndMs = posMs;
+            waveformView.setEndMarker((float) posMs / mediaDuration);
+            Toast.makeText(this, getString(R.string.wave_mode_end_at,
+                    TimeFormatter.format(posMs)), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void toggleWaveTapMode() {
+        waveTapMode = !waveTapMode;
+        btnWaveMode.setSelected(waveTapMode);
+        btnWaveMode.setText(waveTapMode
+                ? R.string.action_wave_mode_on
+                : R.string.action_wave_mode);
+        btnConfirmWaveLine.setVisibility(waveTapMode ? View.VISIBLE : View.GONE);
+        if (waveTapMode) {
+            // Pre-select the first untimed line so Set Start / Set End have a
+            // target without forcing the user to long-press one first.
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                int autoIdx = findFirstUntimedLine();
+                if (autoIdx >= 0) {
+                    selectedLineIndex = autoIdx;
+                    subtitleAdapter.setActiveIndex(autoIdx);
+                    layoutManager.scrollToPositionWithOffset(autoIdx, 100);
+                }
+            }
+            Toast.makeText(this, R.string.wave_mode_enabled, Toast.LENGTH_LONG).show();
+        } else {
+            clearWaveTapState();
+            Toast.makeText(this, R.string.wave_mode_disabled, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Wipes any in-progress wave-tap selection and resets the visual state. */
+    private void clearWaveTapState() {
+        waveTapTarget = WaveTapTarget.NONE;
+        waveTapStartMs = -1;
+        waveTapEndMs = -1;
+        if (waveformView != null) {
+            waveformView.setStartMarker(-1f);
+            waveformView.setEndMarker(-1f);
+        }
+        if (btnSetStart != null) {
+            btnSetStart.setSelected(false);
+            btnSetStart.setText(R.string.action_set_start);
+            btnSetStart.setTag(null);
+        }
+        if (btnSetEnd != null) {
+            btnSetEnd.setSelected(false);
+        }
+    }
+
+    private void confirmWaveTapLine() {
+        if (!waveTapMode) return;
+        if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapStartMs < 0) {
+            Toast.makeText(this, R.string.wave_mode_need_start, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapEndMs < 0) {
+            Toast.makeText(this, R.string.wave_mode_need_end, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapEndMs <= waveTapStartMs) {
+            Toast.makeText(this, R.string.wave_mode_invalid, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SubtitleLine line = subtitleLines.get(selectedLineIndex);
+        line.startMs = waveTapStartMs;
+        line.endMs = waveTapEndMs;
+        sortLinesByTime();
+        autoSaveSubtitles();
+
+        // Reset scratch state and markers for the next line.
+        waveTapTarget = WaveTapTarget.NONE;
+        waveTapStartMs = -1;
+        waveTapEndMs = -1;
+        waveformView.setStartMarker(-1f);
+        waveformView.setEndMarker(-1f);
+        btnSetStart.setSelected(false);
+        btnSetEnd.setSelected(false);
+
+        int next = findFirstUntimedLine();
+        if (next >= 0) {
+            selectedLineIndex = next;
+            subtitleAdapter.setActiveIndex(next);
+            layoutManager.scrollToPositionWithOffset(next, 100);
+            Toast.makeText(this, R.string.wave_mode_confirmed, Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, R.string.wave_mode_all_done, Toast.LENGTH_SHORT).show();
+        }
+    }
+
     // ======================== BOTTOM ACTIONS ========================
 
     private void bindBottomActions() {
+        // Apply system gesture / nav-bar insets to the bottom action row so
+        // the buttons (Open file, Paste sub, Share, …) don't sit underneath
+        // the system "swipe to multitask" gesture area at the bottom edge.
+        View bottomScroll = findViewById(R.id.bottom_action_scroll);
+        if (bottomScroll != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(bottomScroll, (v, insets) -> {
+                int inset = insets.getInsets(
+                        WindowInsetsCompat.Type.systemBars()
+                                | WindowInsetsCompat.Type.systemGestures()
+                ).bottom;
+                v.setPadding(v.getPaddingLeft(), v.getPaddingTop(),
+                        v.getPaddingRight(), inset);
+                return insets;
+            });
+        }
+
         findViewById(R.id.btn_add_line).setOnClickListener(v -> {
             if (mediaPlayer == null) {
                 Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();

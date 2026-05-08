@@ -172,6 +172,17 @@
                 android:id="@+id/btn_loop_range"
                 style="@style/ActionChip"
                 android:text="@string/action_loop_range" />
+
+            <TextView
+                android:id="@+id/btn_wave_mode"
+                style="@style/ActionChip"
+                android:text="@string/action_wave_mode" />
+
+            <TextView
+                android:id="@+id/btn_confirm_wave_line"
+                style="@style/ActionChip"
+                android:text="@string/action_confirm_line"
+                android:visibility="gone" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -207,14 +218,18 @@
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
 
-            <SeekBar
-                android:id="@+id/trim_bar"
+            <com.google.android.material.slider.RangeSlider
+                android:id="@+id/trim_range_slider"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:layout_marginHorizontal="4dp"
-                android:progressTint="@color/brand_secondary"
-                android:thumbTint="@color/brand_secondary" />
+                android:valueFrom="0"
+                android:valueTo="100"
+                app:thumbColor="@color/brand_secondary"
+                app:trackColorActive="@color/brand_secondary"
+                app:trackColorInactive="@color/divider"
+                app:haloColor="@color/brand_secondary" />
 
             <TextView
                 android:id="@+id/tv_trim_end"
@@ -224,6 +239,14 @@
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/trim_drag_hint"
+            android:textSize="10sp"
+            android:textColor="@color/text_secondary"
+            android:layout_marginTop="2dp" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -267,8 +290,12 @@
         android:layout_height="1dp"
         android:background="@color/divider" />
 
-    <!-- Bottom action bar -->
+    <!-- Bottom action bar — extra bottom padding keeps the row away from the
+         system gesture-navigation area at the bottom of the screen. The
+         activity also applies window insets at runtime to add the actual
+         inset on top of this base padding. -->
     <HorizontalScrollView
+        android:id="@+id/bottom_action_scroll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
@@ -279,7 +306,11 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:padding="8dp">
+            android:id="@+id/bottom_action_row"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="32dp">
 
             <TextView
                 android:id="@+id/btn_open_file"
