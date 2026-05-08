@@ -1,5 +1,8 @@
 package com.joy.subtool.model;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * One subtitle cue. Times in milliseconds relative to media start.
  * {@code startMs} and {@code endMs} are -1 when the timestamp has not
@@ -9,6 +12,10 @@ public class SubtitleLine {
     public long startMs;
     public long endMs;
     public String text;
+    /** Original indices of the sub-pool entries this line was created from
+     *  (if any). Used to restore exactly the right entries when a line is
+     *  deleted, avoiding the false-positives of substring matching. */
+    public final List<Integer> sourcePoolIndices = new ArrayList<>();
 
     public SubtitleLine(long startMs, long endMs, String text) {
         this.startMs = startMs;

@@ -761,8 +761,10 @@ public class LocalMediaActivity extends AppCompatActivity {
             return;
         }
 
-        // If sub pool is active, show pool picker dialog
-        if (!subPool.isEmpty()) {
+        // If sub pool has any unused entries, show the pool picker dialog.
+        // (Pool entries are now hidden, not removed, when used — so checking
+        // !subPool.isEmpty() would block normal subtitle creation forever.)
+        if (hasUnusedPoolEntries()) {
             showSubPoolPicker(startMs, endMs);
         } else if (selectedLineIndex >= 0 && selectedLineIndex < subtitleLines.size()) {
             // Assign to selected line
@@ -835,6 +837,12 @@ public class LocalMediaActivity extends AppCompatActivity {
 
                     // Add to subtitle lines (and sort so it lands in chronological order)
                     SubtitleLine newLine = new SubtitleLine(startMs, endMs, merged.toString());
+                    // Remember which pool entries were merged into this line so
+                    // we can restore *exactly* those entries (not random
+                    // substring matches) if the user deletes the line later.
+                    for (SubPoolAdapter.PoolEntry entry : selected) {
+                        newLine.sourcePoolIndices.add(entry.originalIndex);
+                    }
                     subtitleLines.add(newLine);
                     sortLinesByTime();
 
@@ -1417,8 +1425,11 @@ public class LocalMediaActivity extends AppCompatActivity {
                     }
                     autoSaveSubtitles();
 
-                    // Restore matching pool entries so user can re-pick them
-                    restorePoolEntries(removed.text);
+                    // Restore matching pool entries so user can re-pick them.
+                    // Uses the explicit source-pool indices captured when the
+                    // line was created from the pool, so we restore *exactly*
+                    // those entries (no substring false positives).
+                    restorePoolEntries(removed);
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
@@ -1453,13 +1464,38 @@ public class LocalMediaActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void restorePoolEntries(String deletedText) {
-        if (subPool.isEmpty() || deletedText == null) return;
+    /** Restores pool entries that were the source of a deleted subtitle line.
+     *  Uses the explicit {@code sourcePoolIndices} list captured when the line
+     *  was created, so we never restore unrelated entries that just happened
+     *  to be substring matches. Falls back to the legacy substring check for
+     *  legacy lines / lines loaded from the database that don't carry the
+     *  source-index list. */
+    private void restorePoolEntries(SubtitleLine deletedLine) {
+        if (subPool.isEmpty() || deletedLine == null) return;
+        if (!deletedLine.sourcePoolIndices.isEmpty()) {
+            for (SubPoolAdapter.PoolEntry entry : subPool) {
+                if (entry.used && deletedLine.sourcePoolIndices.contains(entry.originalIndex)) {
+                    entry.used = false;
+                }
+            }
+            return;
+        }
+        // Legacy path: no source indices recorded — fall back to text match.
+        String deletedText = deletedLine.text;
+        if (deletedText == null) return;
         for (SubPoolAdapter.PoolEntry entry : subPool) {
             if (entry.used && deletedText.contains(entry.text)) {
                 entry.used = false;
             }
         }
+    }
+
+    private boolean hasUnusedPoolEntries() {
+        if (subPool.isEmpty()) return false;
+        for (SubPoolAdapter.PoolEntry entry : subPool) {
+            if (!entry.used) return true;
+        }
+        return false;
     }
 
     // ======================== WAVE-TAP MODE ========================

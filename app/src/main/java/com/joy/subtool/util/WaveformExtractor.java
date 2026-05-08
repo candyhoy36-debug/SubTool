@@ -24,10 +24,13 @@ public class WaveformExtractor {
     }
 
     public static void extract(Context context, Uri uri, Callback callback) {
+        // Capture the application context so we don't pin the caller's
+        // Activity to a long-running task on the static executor.
+        Context appContext = context.getApplicationContext();
         Handler mainHandler = new Handler(Looper.getMainLooper());
         executor.execute(() -> {
             try {
-                float[] result = extractSync(context, uri);
+                float[] result = extractSync(appContext, uri);
                 mainHandler.post(() -> callback.onWaveformReady(result));
             } catch (Exception e) {
                 mainHandler.post(() -> callback.onError(e));
