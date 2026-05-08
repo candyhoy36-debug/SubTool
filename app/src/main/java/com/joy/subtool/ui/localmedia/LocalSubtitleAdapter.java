@@ -56,9 +56,14 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
 
     public void setActiveIndex(int index) {
         int old = activeIndex;
+        if (old == index) return;
         activeIndex = index;
         if (old >= 0 && old < lines.size()) notifyItemChanged(old);
         if (index >= 0 && index < lines.size()) notifyItemChanged(index);
+    }
+
+    public int getActiveIndex() {
+        return activeIndex;
     }
 
     public void setLoopRange(int start, int end) {

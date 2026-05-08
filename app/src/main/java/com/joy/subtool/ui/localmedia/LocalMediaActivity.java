@@ -1,7 +1,10 @@
 package com.joy.subtool.ui.localmedia;
 
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.media.MediaPlayer;
@@ -19,6 +22,7 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -51,6 +55,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class LocalMediaActivity extends AppCompatActivity {
@@ -87,6 +92,9 @@ public class LocalMediaActivity extends AppCompatActivity {
     private LinearLayoutManager layoutManager;
     private final List<SubtitleLine> subtitleLines = new ArrayList<>();
     private int selectedLineIndex = -1;
+    /** Last index that was set as active by playback so we don't redundantly
+     *  notify+scroll on every tick when the active line hasn't changed. */
+    private int lastActiveIndex = -1;
 
     // --- Sub pool ---
     private final List<SubPoolAdapter.PoolEntry> subPool = new ArrayList<>();
@@ -160,6 +168,22 @@ public class LocalMediaActivity extends AppCompatActivity {
         bindBottomActions();
 
         handler.postDelayed(tickRunnable, TICK_MS);
+
+        // If launched from history (or another activity) with a media URI, open it.
+        Uri incoming = getIntent() != null ? getIntent().getData() : null;
+        if (incoming != null) {
+            openMediaFile(incoming);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri uri = intent != null ? intent.getData() : null;
+        if (uri != null) {
+            openMediaFile(uri);
+        }
     }
 
     // ======================== TOOLBAR ========================
@@ -460,8 +484,12 @@ public class LocalMediaActivity extends AppCompatActivity {
                 break;
             }
         }
-        if (newActive >= 0 && newActive != selectedLineIndex) {
-            subtitleAdapter.setActiveIndex(newActive);
+        // Only update + scroll when the active line actually changes — avoids
+        // re-binding the same row every tick (which felt jittery to users).
+        if (newActive == lastActiveIndex) return;
+        lastActiveIndex = newActive;
+        subtitleAdapter.setActiveIndex(newActive);
+        if (newActive >= 0) {
             layoutManager.scrollToPositionWithOffset(newActive, 100);
         }
     }
@@ -606,15 +634,22 @@ public class LocalMediaActivity extends AppCompatActivity {
             SubtitleLine line = subtitleLines.get(selectedLineIndex);
             line.startMs = startMs;
             line.endMs = endMs;
-            subtitleAdapter.notifyItemChanged(selectedLineIndex);
-            autoSaveSubtitles();
-
-            // Move to next line
-            if (selectedLineIndex + 1 < subtitleLines.size()) {
-                selectedLineIndex++;
-                subtitleAdapter.setActiveIndex(selectedLineIndex);
-                layoutManager.scrollToPositionWithOffset(selectedLineIndex, 100);
+            // Re-sort so the newly-timed line lands in chronological order.
+            sortLinesByTime();
+            // Find the next untimed line (if any) so the user can keep going.
+            int nextUntimed = findFirstUntimedLine();
+            if (nextUntimed >= 0) {
+                selectedLineIndex = nextUntimed;
+                subtitleAdapter.setActiveIndex(nextUntimed);
+                layoutManager.scrollToPositionWithOffset(nextUntimed, 100);
+            } else {
+                // No more untimed lines: just keep the currently-edited line selected.
+                selectedLineIndex = subtitleLines.indexOf(line);
+                if (selectedLineIndex >= 0) {
+                    subtitleAdapter.setActiveIndex(selectedLineIndex);
+                }
             }
+            autoSaveSubtitles();
         } else {
             // Create new line with input dialog
             showNewSubtitleDialog(startMs, endMs);
@@ -663,10 +698,10 @@ public class LocalMediaActivity extends AppCompatActivity {
                         merged.append(entry.text);
                     }
 
-                    // Add to subtitle lines
+                    // Add to subtitle lines (and sort so it lands in chronological order)
                     SubtitleLine newLine = new SubtitleLine(startMs, endMs, merged.toString());
                     subtitleLines.add(newLine);
-                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    sortLinesByTime();
 
                     // Mark used entries (hide, not delete)
                     for (SubPoolAdapter.PoolEntry entry : selected) {
@@ -702,20 +737,65 @@ public class LocalMediaActivity extends AppCompatActivity {
         container.setPadding(paddingPx, paddingPx / 2, paddingPx, 0);
         container.addView(input);
 
+        final boolean isManualAdd = startMs < 0 || endMs < 0;
+        String title = isManualAdd
+                ? getString(R.string.action_add_line)
+                : getString(R.string.new_subtitle_title,
+                        TimeFormatter.format(startMs), TimeFormatter.format(endMs));
+
         new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.new_subtitle_title,
-                        TimeFormatter.format(startMs), TimeFormatter.format(endMs)))
+                .setTitle(title)
                 .setView(container)
                 .setPositiveButton(R.string.action_add, (d, w) -> {
                     String text = input.getText() != null ? input.getText().toString().trim() : "";
                     if (text.isEmpty()) return;
                     SubtitleLine line = new SubtitleLine(startMs, endMs, text);
                     subtitleLines.add(line);
-                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    if (isManualAdd) {
+                        // Append + select the new line so the global Set Start /
+                        // Set End buttons can target it without needing to long-press.
+                        subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                        int newIdx = subtitleLines.size() - 1;
+                        selectedLineIndex = newIdx;
+                        lastActiveIndex = newIdx;
+                        subtitleAdapter.setActiveIndex(newIdx);
+                        layoutManager.scrollToPositionWithOffset(newIdx, 100);
+                        Toast.makeText(this, R.string.added_line_use_start_end,
+                                Toast.LENGTH_LONG).show();
+                    } else {
+                        // Has timestamps: keep the list sorted by start time.
+                        sortLinesByTime();
+                    }
                     autoSaveSubtitles();
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
+    }
+
+    /** Sorts {@link #subtitleLines} by start time ascending. Lines without a
+     *  timestamp are kept at the end (in their original relative order, since
+     *  Java's {@code List.sort} is stable). The currently-selected line keeps
+     *  pointing at the same {@link SubtitleLine} instance after sorting. */
+    private void sortLinesByTime() {
+        SubtitleLine selected =
+                (selectedLineIndex >= 0 && selectedLineIndex < subtitleLines.size())
+                        ? subtitleLines.get(selectedLineIndex)
+                        : null;
+        Collections.sort(subtitleLines, (a, b) -> {
+            long ka = a.hasTimestamp() ? a.startMs : Long.MAX_VALUE;
+            long kb = b.hasTimestamp() ? b.startMs : Long.MAX_VALUE;
+            return Long.compare(ka, kb);
+        });
+        if (selected != null) {
+            selectedLineIndex = subtitleLines.indexOf(selected);
+        }
+        subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+        if (selectedLineIndex >= 0) {
+            subtitleAdapter.setActiveIndex(selectedLineIndex);
+            lastActiveIndex = selectedLineIndex;
+        } else {
+            lastActiveIndex = -1;
+        }
     }
 
     // ======================== SPEED ========================
@@ -951,6 +1031,7 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         subtitleAdapter.setOnLineClickListener((position, line) -> {
             selectedLineIndex = position;
+            lastActiveIndex = position;
             subtitleAdapter.setActiveIndex(position);
             if (line.hasTimestamp() && mediaPlayer != null) {
                 mediaPlayer.seekTo((int) line.startMs);
@@ -990,6 +1071,7 @@ public class LocalMediaActivity extends AppCompatActivity {
 
     private void showLineOptionsDialog(int position, SubtitleLine line) {
         String[] options = {
+                getString(R.string.option_copy_text),
                 getString(R.string.option_edit_text),
                 getString(R.string.option_edit_timestamp),
                 getString(R.string.option_delete),
@@ -1000,10 +1082,11 @@ public class LocalMediaActivity extends AppCompatActivity {
                 .setTitle(getString(R.string.line_options_title, position + 1))
                 .setItems(options, (d, which) -> {
                     switch (which) {
-                        case 0: editLineText(position, line); break;
-                        case 1: editLineTimestamp(position, line); break;
-                        case 2: deleteLine(position); break;
-                        case 3:
+                        case 0: copyLineText(line); break;
+                        case 1: editLineText(position, line); break;
+                        case 2: editLineTimestamp(position, line); break;
+                        case 3: deleteLine(position); break;
+                        case 4:
                             if (line.hasTimestamp()) {
                                 selectedLineIndex = position;
                                 showLoopCountDialog(LoopMode.SINGLE, position, position);
@@ -1011,7 +1094,7 @@ public class LocalMediaActivity extends AppCompatActivity {
                                 Toast.makeText(this, R.string.line_no_timestamp, Toast.LENGTH_SHORT).show();
                             }
                             break;
-                        case 4:
+                        case 5:
                             loopRangeStart = position;
                             Toast.makeText(this, getString(R.string.range_start_set, position + 1),
                                     Toast.LENGTH_SHORT).show();
@@ -1019,6 +1102,15 @@ public class LocalMediaActivity extends AppCompatActivity {
                     }
                 })
                 .show();
+    }
+
+    private void copyLineText(SubtitleLine line) {
+        if (line == null || line.text == null) return;
+        ClipboardManager cm =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(ClipData.newPlainText("subtitle", line.text));
+        Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show();
     }
 
     private void editLineText(int position, SubtitleLine line) {
@@ -1047,30 +1139,128 @@ public class LocalMediaActivity extends AppCompatActivity {
     }
 
     private void editLineTimestamp(int position, SubtitleLine line) {
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_edit_timestamp, null);
-        EditText etStart = dialogView.findViewById(R.id.et_start_ms);
-        EditText etEnd = dialogView.findViewById(R.id.et_end_ms);
+        // Build a small dialog with two human-readable time fields and "Hiện tại"
+        // shortcut buttons that fill in the current playback position. Far
+        // friendlier than typing milliseconds.
+        int paddingPx = (int) (getResources().getDisplayMetrics().density * 16);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(paddingPx, paddingPx, paddingPx, 0);
 
-        if (line.startMs >= 0) etStart.setText(String.valueOf(line.startMs));
-        if (line.endMs >= 0) etEnd.setText(String.valueOf(line.endMs));
+        EditText etStart = new EditText(this);
+        etStart.setHint(R.string.start_ms_label);
+        etStart.setInputType(InputType.TYPE_CLASS_TEXT);
+        if (line.startMs >= 0) etStart.setText(TimeFormatter.formatPrecise(line.startMs));
+
+        EditText etEnd = new EditText(this);
+        etEnd.setHint(R.string.end_ms_label);
+        etEnd.setInputType(InputType.TYPE_CLASS_TEXT);
+        if (line.endMs >= 0) etEnd.setText(TimeFormatter.formatPrecise(line.endMs));
+
+        TextView btnUseStart = new TextView(this);
+        btnUseStart.setText(R.string.action_use_current);
+        btnUseStart.setTextColor(getColor(R.color.brand_primary));
+        btnUseStart.setPadding(paddingPx / 2, paddingPx / 4, paddingPx / 2, paddingPx / 4);
+        btnUseStart.setOnClickListener(v -> {
+            if (mediaPlayer != null) {
+                etStart.setText(TimeFormatter.formatPrecise(mediaPlayer.getCurrentPosition()));
+            }
+        });
+
+        TextView btnUseEnd = new TextView(this);
+        btnUseEnd.setText(R.string.action_use_current);
+        btnUseEnd.setTextColor(getColor(R.color.brand_primary));
+        btnUseEnd.setPadding(paddingPx / 2, paddingPx / 4, paddingPx / 2, paddingPx / 4);
+        btnUseEnd.setOnClickListener(v -> {
+            if (mediaPlayer != null) {
+                etEnd.setText(TimeFormatter.formatPrecise(mediaPlayer.getCurrentPosition()));
+            }
+        });
+
+        TextView lblStart = new TextView(this);
+        lblStart.setText(R.string.start_ms_label);
+        lblStart.setTextColor(getColor(R.color.text_primary));
+        TextView lblEnd = new TextView(this);
+        lblEnd.setText(R.string.end_ms_label);
+        lblEnd.setTextColor(getColor(R.color.text_primary));
+        TextView hint = new TextView(this);
+        hint.setText(R.string.edit_timestamp_hint);
+        hint.setTextSize(11f);
+        hint.setTextColor(getColor(R.color.text_secondary));
+
+        root.addView(lblStart);
+        LinearLayout startRow = new LinearLayout(this);
+        startRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams etParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        startRow.addView(etStart, etParams);
+        startRow.addView(btnUseStart);
+        root.addView(startRow);
+
+        root.addView(lblEnd);
+        LinearLayout endRow = new LinearLayout(this);
+        endRow.setOrientation(LinearLayout.HORIZONTAL);
+        endRow.addView(etEnd, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        endRow.addView(btnUseEnd);
+        root.addView(endRow);
+
+        root.addView(hint);
 
         new AlertDialog.Builder(this)
                 .setTitle(R.string.edit_timestamp_title)
-                .setView(dialogView)
+                .setView(root)
                 .setPositiveButton(R.string.action_save, (d, w) -> {
-                    try {
-                        long start = Long.parseLong(etStart.getText().toString().trim());
-                        long end = Long.parseLong(etEnd.getText().toString().trim());
-                        if (end > start) {
-                            line.startMs = start;
-                            line.endMs = end;
-                            subtitleAdapter.notifyItemChanged(position);
-                            autoSaveSubtitles();
-                        }
-                    } catch (NumberFormatException ignored) {}
+                    long start = parseHumanTime(etStart.getText().toString().trim());
+                    long end = parseHumanTime(etEnd.getText().toString().trim());
+                    if (start < 0 || end < 0 || end <= start) {
+                        Toast.makeText(this, R.string.invalid_time_format,
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    line.startMs = start;
+                    line.endMs = end;
+                    sortLinesByTime();
+                    autoSaveSubtitles();
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
+    }
+
+    /**
+     * Parses a user-typed time string into milliseconds. Accepts:
+     * raw ms ("12500"), seconds ("12.5"), "M:SS", "M:SS.mmm", "H:MM:SS",
+     * "H:MM:SS.mmm". Returns -1 on parse failure.
+     */
+    private static long parseHumanTime(String s) {
+        if (s == null) return -1;
+        s = s.trim();
+        if (s.isEmpty()) return -1;
+        try {
+            // Pure integer = milliseconds (back-compat with the old dialog).
+            if (s.matches("\\d+")) {
+                return Long.parseLong(s);
+            }
+            String[] parts = s.split(":");
+            double hours = 0, minutes = 0, seconds;
+            if (parts.length == 1) {
+                seconds = Double.parseDouble(parts[0]);
+            } else if (parts.length == 2) {
+                minutes = Long.parseLong(parts[0]);
+                seconds = Double.parseDouble(parts[1]);
+            } else if (parts.length == 3) {
+                hours = Long.parseLong(parts[0]);
+                minutes = Long.parseLong(parts[1]);
+                seconds = Double.parseDouble(parts[2]);
+            } else {
+                return -1;
+            }
+            double total = hours * 3600 + minutes * 60 + seconds;
+            if (total < 0) return -1;
+            return Math.round(total * 1000);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     private void deleteLine(int position) {
@@ -1078,11 +1268,51 @@ public class LocalMediaActivity extends AppCompatActivity {
                 .setMessage(R.string.delete_line_confirm)
                 .setPositiveButton(R.string.action_delete, (d, w) -> {
                     SubtitleLine removed = subtitleLines.remove(position);
+                    // Reset selection/active tracking — the indices we cached
+                    // may now point at the wrong line (or past the end).
+                    if (selectedLineIndex == position) {
+                        selectedLineIndex = -1;
+                    } else if (selectedLineIndex > position) {
+                        selectedLineIndex--;
+                    }
+                    lastActiveIndex = -1;
                     subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    if (selectedLineIndex >= 0) {
+                        subtitleAdapter.setActiveIndex(selectedLineIndex);
+                    }
                     autoSaveSubtitles();
 
                     // Restore matching pool entries so user can re-pick them
                     restorePoolEntries(removed.text);
+                })
+                .setNegativeButton(R.string.action_cancel, null)
+                .show();
+    }
+
+    private void clearAllSubtitles() {
+        if (subtitleLines.isEmpty()) {
+            Toast.makeText(this, R.string.no_subs_to_clear, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int count = subtitleLines.size();
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.clear_all_confirm_title)
+                .setMessage(getString(R.string.clear_all_confirm_message, count))
+                .setPositiveButton(R.string.action_delete, (d, w) -> {
+                    subtitleLines.clear();
+                    selectedLineIndex = -1;
+                    lastActiveIndex = -1;
+                    // Reset any pool "used" flags so the user can re-assign
+                    // bulk-pasted entries from scratch.
+                    for (SubPoolAdapter.PoolEntry entry : subPool) {
+                        entry.used = false;
+                    }
+                    clearLoop();
+                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    subtitleAdapter.setActiveIndex(-1);
+                    autoSaveSubtitles();
+                    Toast.makeText(this, R.string.cleared_all_subs,
+                            Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
@@ -1136,6 +1366,8 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         findViewById(R.id.btn_open_file).setOnClickListener(v ->
                 mediaPickerLauncher.launch(new String[]{"audio/*", "video/*"}));
+
+        findViewById(R.id.btn_clear_all).setOnClickListener(v -> clearAllSubtitles());
     }
 
     // ======================== PASTE SUB (BULK) ========================
@@ -1338,17 +1570,19 @@ public class LocalMediaActivity extends AppCompatActivity {
         SubToolApp.get().getDbExecutor().execute(() -> {
             LocalSubtitleDao dao = SubToolApp.get().getDatabase().localSubtitleDao();
             List<LocalSubtitleEntity> entities = dao.getByMediaUri(uri.toString());
-            if (entities != null && !entities.isEmpty()) {
-                List<SubtitleLine> loaded = new ArrayList<>();
-                for (LocalSubtitleEntity e : entities) {
-                    loaded.add(new SubtitleLine(e.startMs, e.endMs, e.text));
-                }
-                runOnUiThread(() -> {
-                    subtitleLines.clear();
-                    subtitleLines.addAll(loaded);
+            runOnUiThread(() -> {
+                subtitleLines.clear();
+                selectedLineIndex = -1;
+                lastActiveIndex = -1;
+                if (entities != null && !entities.isEmpty()) {
+                    for (LocalSubtitleEntity e : entities) {
+                        subtitleLines.add(new SubtitleLine(e.startMs, e.endMs, e.text));
+                    }
+                    sortLinesByTime();
+                } else {
                     subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
-                });
-            }
+                }
+            });
         });
     }
 

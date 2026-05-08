@@ -130,4 +130,23 @@
     <string name="desc_increase_start">Tăng thời gian bắt đầu</string>
     <string name="desc_decrease_end">Giảm thời gian kết thúc</string>
     <string name="desc_increase_end">Tăng thời gian kết thúc</string>
+
+    <!-- Clear all -->
+    <string name="action_clear_all">Xóa tất cả</string>
+    <string name="clear_all_confirm_title">Xóa toàn bộ sub?</string>
+    <string name="clear_all_confirm_message">Toàn bộ %d dòng sub sẽ bị xóa. Bạn có chắc muốn làm lại từ đầu?</string>
+    <string name="cleared_all_subs">Đã xóa toàn bộ sub</string>
+    <string name="no_subs_to_clear">Chưa có sub nào để xóa</string>
+
+    <!-- Copy text -->
+    <string name="option_copy_text">Sao chép nội dung</string>
+    <string name="copied_to_clipboard">Đã sao chép</string>
+
+    <!-- Manual add hint -->
+    <string name="added_line_use_start_end">Câu mới đã chọn — nhấn Bắt đầu / Kết thúc để gán thời gian</string>
+
+    <!-- Edit timestamp dialog (improved) -->
+    <string name="edit_timestamp_hint">Định dạng: phút:giây hoặc giờ:phút:giây (ví dụ 1:23 hoặc 1:02:03.500)</string>
+    <string name="action_use_current">Hiện tại</string>
+    <string name="invalid_time_format">Định dạng thời gian không hợp lệ</string>
 </resources>

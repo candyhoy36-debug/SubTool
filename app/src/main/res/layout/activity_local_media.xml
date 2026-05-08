@@ -322,6 +322,12 @@
                 style="@style/BottomAction"
                 android:text="@string/action_share"
                 android:drawableStart="@drawable/ic_share" />
+
+            <TextView
+                android:id="@+id/btn_clear_all"
+                style="@style/BottomAction"
+                android:text="@string/action_clear_all"
+                android:drawableStart="@drawable/ic_delete" />
         </LinearLayout>
     </HorizontalScrollView>
 
