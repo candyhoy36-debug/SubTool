@@ -28,9 +28,11 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
     }
 
     public interface OnTimeAdjustListener {
-        void onDecreaseStart(int position, SubtitleLine line);
-        void onIncreaseEnd(int position, SubtitleLine line);
+        void onAdjustStart(int position, SubtitleLine line, long deltaMs);
+        void onAdjustEnd(int position, SubtitleLine line, long deltaMs);
     }
+
+    private static final long TIME_ADJUST_STEP_MS = 500L;
 
     private List<SubtitleLine> lines = new ArrayList<>();
     private int activeIndex = -1;
@@ -111,20 +113,32 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
             holder.tvTime.setText(
                     TimeFormatter.format(line.startMs) + " - " + TimeFormatter.format(line.endMs));
             holder.tvTime.setVisibility(View.VISIBLE);
-            holder.btnMinus.setVisibility(View.VISIBLE);
-            holder.btnPlus.setVisibility(View.VISIBLE);
+            holder.timeAdjustContainer.setVisibility(View.VISIBLE);
         } else {
             holder.tvTime.setText("--:-- - --:--");
             holder.tvTime.setVisibility(View.VISIBLE);
-            holder.btnMinus.setVisibility(View.GONE);
-            holder.btnPlus.setVisibility(View.GONE);
+            holder.timeAdjustContainer.setVisibility(View.GONE);
         }
 
-        holder.btnMinus.setOnClickListener(v -> {
-            if (timeAdjustListener != null) timeAdjustListener.onDecreaseStart(position, line);
+        holder.btnStartMinus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) {
+                timeAdjustListener.onAdjustStart(position, line, -TIME_ADJUST_STEP_MS);
+            }
         });
-        holder.btnPlus.setOnClickListener(v -> {
-            if (timeAdjustListener != null) timeAdjustListener.onIncreaseEnd(position, line);
+        holder.btnStartPlus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) {
+                timeAdjustListener.onAdjustStart(position, line, TIME_ADJUST_STEP_MS);
+            }
+        });
+        holder.btnEndMinus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) {
+                timeAdjustListener.onAdjustEnd(position, line, -TIME_ADJUST_STEP_MS);
+            }
+        });
+        holder.btnEndPlus.setOnClickListener(v -> {
+            if (timeAdjustListener != null) {
+                timeAdjustListener.onAdjustEnd(position, line, TIME_ADJUST_STEP_MS);
+            }
         });
 
         boolean isActive = position == activeIndex;
@@ -160,16 +174,22 @@ public class LocalSubtitleAdapter extends RecyclerView.Adapter<LocalSubtitleAdap
         final TextView tvIndex;
         final TextView tvText;
         final TextView tvTime;
-        final TextView btnMinus;
-        final TextView btnPlus;
+        final View timeAdjustContainer;
+        final TextView btnStartMinus;
+        final TextView btnStartPlus;
+        final TextView btnEndMinus;
+        final TextView btnEndPlus;
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             tvIndex = itemView.findViewById(R.id.tv_index);
             tvText = itemView.findViewById(R.id.tv_text);
             tvTime = itemView.findViewById(R.id.tv_time);
-            btnMinus = itemView.findViewById(R.id.btn_minus);
-            btnPlus = itemView.findViewById(R.id.btn_plus);
+            timeAdjustContainer = itemView.findViewById(R.id.time_adjust_container);
+            btnStartMinus = itemView.findViewById(R.id.btn_start_minus);
+            btnStartPlus = itemView.findViewById(R.id.btn_start_plus);
+            btnEndMinus = itemView.findViewById(R.id.btn_end_minus);
+            btnEndPlus = itemView.findViewById(R.id.btn_end_plus);
         }
     }
 }

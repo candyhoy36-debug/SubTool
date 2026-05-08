@@ -122,4 +122,12 @@
     <!-- Errors -->
     <string name="error_open_file">Không thể mở file này</string>
     <string name="error_no_media">Hãy mở file media trước</string>
+
+    <!-- Subtitle line time-adjust controls -->
+    <string name="label_adjust_start">Đầu</string>
+    <string name="label_adjust_end">Cuối</string>
+    <string name="desc_decrease_start">Giảm thời gian bắt đầu</string>
+    <string name="desc_increase_start">Tăng thời gian bắt đầu</string>
+    <string name="desc_decrease_end">Giảm thời gian kết thúc</string>
+    <string name="desc_increase_end">Tăng thời gian kết thúc</string>
 </resources>

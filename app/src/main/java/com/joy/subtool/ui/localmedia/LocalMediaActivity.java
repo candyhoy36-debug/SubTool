@@ -56,7 +56,6 @@ import java.util.List;
 public class LocalMediaActivity extends AppCompatActivity {
 
     private static final long TICK_MS = 250L;
-    private static final long TIME_ADJUST_STEP_MS = 500L;
 
     // --- Player ---
     @Nullable private MediaPlayer mediaPlayer;
@@ -553,6 +552,17 @@ public class LocalMediaActivity extends AppCompatActivity {
             Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();
             return;
         }
+        // Auto-pick the first line that doesn't have a timestamp yet so the user can
+        // assign Start/End to imported sub lines without having to tap them first.
+        if (subPool.isEmpty()
+                && (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size())) {
+            int autoIdx = findFirstUntimedLine();
+            if (autoIdx >= 0) {
+                selectedLineIndex = autoIdx;
+                subtitleAdapter.setActiveIndex(autoIdx);
+                layoutManager.scrollToPositionWithOffset(autoIdx, 100);
+            }
+        }
         long startMs = mediaPlayer.getCurrentPosition();
         // Store temporarily, wait for Set End
         btnSetStart.setTag(startMs);
@@ -560,6 +570,15 @@ public class LocalMediaActivity extends AppCompatActivity {
         btnSetStart.setSelected(true);
         Toast.makeText(this, getString(R.string.start_set_at, TimeFormatter.format(startMs)),
                 Toast.LENGTH_SHORT).show();
+    }
+
+    private int findFirstUntimedLine() {
+        for (int i = 0; i < subtitleLines.size(); i++) {
+            if (!subtitleLines.get(i).hasTimestamp()) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private void onSetEnd() {
@@ -949,17 +968,19 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         subtitleAdapter.setOnTimeAdjustListener(new LocalSubtitleAdapter.OnTimeAdjustListener() {
             @Override
-            public void onDecreaseStart(int position, SubtitleLine line) {
-                long newStart = Math.max(0, line.startMs - TIME_ADJUST_STEP_MS);
+            public void onAdjustStart(int position, SubtitleLine line, long deltaMs) {
+                long maxStart = line.endMs > 0 ? line.endMs - 100 : Long.MAX_VALUE;
+                long newStart = Math.max(0, Math.min(maxStart, line.startMs + deltaMs));
                 line.startMs = newStart;
                 subtitleAdapter.notifyItemChanged(position);
                 autoSaveSubtitles();
             }
 
             @Override
-            public void onIncreaseEnd(int position, SubtitleLine line) {
+            public void onAdjustEnd(int position, SubtitleLine line, long deltaMs) {
                 long maxEnd = mediaDuration > 0 ? mediaDuration : Long.MAX_VALUE;
-                long newEnd = Math.min(maxEnd, line.endMs + TIME_ADJUST_STEP_MS);
+                long minEnd = line.startMs >= 0 ? line.startMs + 100 : 0;
+                long newEnd = Math.max(minEnd, Math.min(maxEnd, line.endMs + deltaMs));
                 line.endMs = newEnd;
                 subtitleAdapter.notifyItemChanged(position);
                 autoSaveSubtitles();
