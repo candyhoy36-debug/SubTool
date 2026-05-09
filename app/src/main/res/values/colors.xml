@@ -16,4 +16,14 @@
     <color name="chip_bg_active">#FFE3F2FD</color>
     <color name="chip_text">#FF424242</color>
     <color name="chip_text_active">#FF1976D2</color>
+
+    <color name="waveform_played">#FF5C6BC0</color>
+    <color name="waveform_unplayed">#FFB0BEC5</color>
+    <color name="waveform_center_line">#FFE0E0E0</color>
+
+    <!-- Trim region tint on the waveform (semi-transparent teal). -->
+    <color name="waveform_trim_overlay">#3326A69A</color>
+    <!-- Markers placed on the waveform when picking start/end. -->
+    <color name="waveform_marker_start">#FF2E7D32</color>
+    <color name="waveform_marker_end">#FFD32F2F</color>
 </resources>

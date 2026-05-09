@@ -4,13 +4,15 @@
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingHorizontal="12dp"
-    android:paddingVertical="8dp"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp"
+    android:paddingTop="6dp"
+    android:paddingBottom="6dp"
     android:background="?attr/selectableItemBackground">
 
     <TextView
         android:id="@+id/tv_index"
-        android:layout_width="28dp"
+        android:layout_width="24dp"
         android:layout_height="wrap_content"
         android:textSize="12sp"
         android:textColor="@color/text_secondary"
@@ -21,7 +23,7 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:orientation="vertical"
-        android:layout_marginStart="8dp">
+        android:layout_marginStart="6dp">
 
         <TextView
             android:id="@+id/tv_text"
@@ -39,5 +41,94 @@
             android:textSize="11sp"
             android:textColor="@color/text_secondary"
             android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- Time-adjust controls: Start -/+ on top, End -/+ below -->
+    <LinearLayout
+        android:id="@+id/time_adjust_container"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginStart="4dp">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="36dp"
+                android:layout_height="wrap_content"
+                android:text="@string/label_adjust_start"
+                android:textSize="10sp"
+                android:textColor="@color/text_secondary"
+                android:gravity="end"
+                android:layout_marginEnd="2dp" />
+
+            <TextView
+                android:id="@+id/btn_start_minus"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:text="−"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_primary"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/desc_decrease_start" />
+
+            <TextView
+                android:id="@+id/btn_start_plus"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:text="+"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_primary"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/desc_increase_start" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="36dp"
+                android:layout_height="wrap_content"
+                android:text="@string/label_adjust_end"
+                android:textSize="10sp"
+                android:textColor="@color/text_secondary"
+                android:gravity="end"
+                android:layout_marginEnd="2dp" />
+
+            <TextView
+                android:id="@+id/btn_end_minus"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:text="−"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_primary"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/desc_decrease_end" />
+
+            <TextView
+                android:id="@+id/btn_end_plus"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:text="+"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@color/brand_primary"
+                android:gravity="center"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/desc_increase_end" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

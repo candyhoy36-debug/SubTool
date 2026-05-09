@@ -1,7 +1,10 @@
 package com.joy.subtool.ui.localmedia;
 
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.media.MediaPlayer;
@@ -19,6 +22,7 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -30,11 +34,16 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.slider.RangeSlider;
 import com.joy.subtool.R;
+import com.joy.subtool.ui.SettingsActivity;
+import com.joy.subtool.util.AppPrefs;
 import com.joy.subtool.SubToolApp;
 import com.joy.subtool.data.LocalMediaHistoryDao;
 import com.joy.subtool.data.LocalMediaHistoryEntity;
@@ -44,12 +53,14 @@ import com.joy.subtool.model.SubtitleLine;
 import com.joy.subtool.util.SrtExporter;
 import com.joy.subtool.util.SrtParser;
 import com.joy.subtool.util.TimeFormatter;
+import com.joy.subtool.util.WaveformExtractor;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class LocalMediaActivity extends AppCompatActivity {
@@ -61,6 +72,7 @@ public class LocalMediaActivity extends AppCompatActivity {
     private SurfaceView surfaceView;
     private FrameLayout videoContainer;
     private View audioPlaceholder;
+    private WaveformView waveformView;
     private SeekBar seekBar;
     private TextView tvCurrentTime;
     private TextView tvTotalTime;
@@ -71,13 +83,17 @@ public class LocalMediaActivity extends AppCompatActivity {
     private boolean userSeeking = false;
 
     // --- Trim ---
-    private SeekBar trimBar;
+    private RangeSlider trimRangeSlider;
     private TextView tvTrimStart;
     private TextView tvTrimEnd;
     private View trimContainer;
     private long trimStartMs = 0;
     private long trimEndMs = Long.MAX_VALUE;
     private boolean trimEnabled = false;
+    /** True while we're updating the RangeSlider programmatically — prevents
+     *  the addOnChangeListener from re-clobbering trimStartMs/trimEndMs that
+     *  we just set in code. */
+    private boolean syncingTrimSlider = false;
 
     // --- Subtitle list ---
     private RecyclerView rvSubtitles;
@@ -85,6 +101,9 @@ public class LocalMediaActivity extends AppCompatActivity {
     private LinearLayoutManager layoutManager;
     private final List<SubtitleLine> subtitleLines = new ArrayList<>();
     private int selectedLineIndex = -1;
+    /** Last index that was set as active by playback so we don't redundantly
+     *  notify+scroll on every tick when the active line hasn't changed. */
+    private int lastActiveIndex = -1;
 
     // --- Sub pool ---
     private final List<SubPoolAdapter.PoolEntry> subPool = new ArrayList<>();
@@ -106,6 +125,17 @@ public class LocalMediaActivity extends AppCompatActivity {
     private TextView btnSpeed;
     private TextView btnLoop;
     private TextView btnLoopRange;
+    private TextView btnWaveMode;
+    private TextView btnConfirmWaveLine;
+
+    // --- Wave-tap mode (assign Start/End by tapping the audio waveform) ---
+    private enum WaveTapTarget { NONE, START, END }
+    private boolean waveTapMode = false;
+    private WaveTapTarget waveTapTarget = WaveTapTarget.NONE;
+    /** Scratch start/end picked via wave taps (-1 = not yet picked). They are
+     *  written to the selected line when the user presses Confirm. */
+    private long waveTapStartMs = -1;
+    private long waveTapEndMs = -1;
 
     // --- Current file ---
     @Nullable private Uri currentFileUri;
@@ -158,6 +188,22 @@ public class LocalMediaActivity extends AppCompatActivity {
         bindBottomActions();
 
         handler.postDelayed(tickRunnable, TICK_MS);
+
+        // If launched from history (or another activity) with a media URI, open it.
+        Uri incoming = getIntent() != null ? getIntent().getData() : null;
+        if (incoming != null) {
+            openMediaFile(incoming);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri uri = intent != null ? intent.getData() : null;
+        if (uri != null) {
+            openMediaFile(uri);
+        }
     }
 
     // ======================== TOOLBAR ========================
@@ -169,6 +215,10 @@ public class LocalMediaActivity extends AppCompatActivity {
             int id = item.getItemId();
             if (id == R.id.action_history) {
                 startActivity(new Intent(this, LocalMediaHistoryActivity.class));
+                return true;
+            }
+            if (id == R.id.action_settings) {
+                startActivity(new Intent(this, SettingsActivity.class));
                 return true;
             }
             return false;
@@ -188,9 +238,31 @@ public class LocalMediaActivity extends AppCompatActivity {
         btnRewind = findViewById(R.id.btn_rewind);
         btnForward = findViewById(R.id.btn_forward);
 
+        waveformView = findViewById(R.id.waveform_view);
+
         btnPlayPause.setOnClickListener(v -> togglePlayPause());
-        btnRewind.setOnClickListener(v -> seekRelative(-5000));
-        btnForward.setOnClickListener(v -> seekRelative(5000));
+        btnRewind.setOnClickListener(v -> seekRelative(-AppPrefs.getSkipStepMs(this)));
+        btnForward.setOnClickListener(v -> seekRelative(AppPrefs.getSkipStepMs(this)));
+
+        waveformView.setOnSeekListener(fraction -> {
+            if (mediaPlayer == null || mediaDuration <= 0) return;
+            int target = (int) (fraction * mediaDuration);
+            if (trimEnabled) {
+                target = Math.max((int) trimStartMs, Math.min(target, (int) trimEndMs));
+            }
+            // In wave-tap mode the next tap goes to the start/end picker; in
+            // every other case the tap behaves like a seek.
+            if (waveTapMode && waveTapTarget != WaveTapTarget.NONE) {
+                onWaveTap(target);
+                return;
+            }
+            try {
+                mediaPlayer.seekTo(target);
+                seekBar.setProgress(target);
+                tvCurrentTime.setText(TimeFormatter.format(target));
+                waveformView.setProgress((float) target / mediaDuration);
+            } catch (IllegalStateException ignored) {}
+        });
 
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
@@ -267,10 +339,13 @@ public class LocalMediaActivity extends AppCompatActivity {
             trimStartMs = 0;
             trimEndMs = mediaDuration;
             trimEnabled = false;
-            trimBar.setMax((int) mediaDuration);
-            trimBar.setProgress(0);
             tvTrimStart.setText(TimeFormatter.format(0));
             tvTrimEnd.setText(TimeFormatter.format(mediaDuration));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
+
+            // Reset wave-tap markers between files.
+            clearWaveTapState();
 
             applyPlaybackSpeed();
 
@@ -278,6 +353,24 @@ public class LocalMediaActivity extends AppCompatActivity {
 
             mediaPlayer.start();
             btnPlayPause.setImageResource(R.drawable.ic_pause);
+
+            // Extract waveform in background
+            if (!isVideo) {
+                waveformView.setAmplitudes(null);
+                final Uri extractUri = uri;
+                WaveformExtractor.extract(this, uri, new WaveformExtractor.Callback() {
+                    @Override
+                    public void onWaveformReady(float[] amplitudes) {
+                        if (extractUri.equals(currentFileUri)) {
+                            waveformView.setAmplitudes(amplitudes);
+                        }
+                    }
+                    @Override
+                    public void onError(Exception e) {
+                        // Waveform extraction failed silently
+                    }
+                });
+            }
 
             recordHistory(uri);
             loadSavedSubtitles(uri);
@@ -312,13 +405,27 @@ public class LocalMediaActivity extends AppCompatActivity {
         } else {
             target = Math.max(0, Math.min(target, (int) mediaDuration));
         }
-        mediaPlayer.seekTo(target);
+        try {
+            mediaPlayer.seekTo(target);
+        } catch (IllegalStateException ignored) {}
+        // Refresh the seekbar / waveform / time label here instead of relying on
+        // the periodic tick — when the player is paused the tick early-returns,
+        // so without this the UI looked frozen after tapping rewind/forward.
         tvCurrentTime.setText(TimeFormatter.format(target));
+        seekBar.setProgress(target);
+        if (mediaDuration > 0) {
+            waveformView.setProgress((float) target / mediaDuration);
+        }
     }
 
     private void onTick() {
         if (mediaPlayer == null) return;
-        int pos = mediaPlayer.getCurrentPosition();
+        int pos;
+        try {
+            pos = mediaPlayer.getCurrentPosition();
+        } catch (IllegalStateException e) {
+            return;
+        }
 
         // Enforce trim bounds
         if (trimEnabled && pos >= trimEndMs) {
@@ -326,8 +433,10 @@ public class LocalMediaActivity extends AppCompatActivity {
                 handleLoopRepeat((int) trimStartMs);
                 return;
             }
-            mediaPlayer.seekTo((int) trimStartMs);
-            mediaPlayer.pause();
+            try {
+                mediaPlayer.seekTo((int) trimStartMs);
+                mediaPlayer.pause();
+            } catch (IllegalStateException ignored) {}
             btnPlayPause.setImageResource(R.drawable.ic_play);
             return;
         }
@@ -358,6 +467,9 @@ public class LocalMediaActivity extends AppCompatActivity {
         if (!userSeeking) {
             seekBar.setProgress(pos);
             tvCurrentTime.setText(TimeFormatter.format(pos));
+            if (mediaDuration > 0) {
+                waveformView.setProgress((float) pos / mediaDuration);
+            }
         }
 
         updateActiveSubtitle(pos);
@@ -369,7 +481,9 @@ public class LocalMediaActivity extends AppCompatActivity {
             if (loopRemaining <= 0) {
                 clearLoop();
                 if (mediaPlayer != null) {
-                    mediaPlayer.pause();
+                    try {
+                        mediaPlayer.pause();
+                    } catch (IllegalStateException ignored) {}
                     btnPlayPause.setImageResource(R.drawable.ic_play);
                 }
                 Toast.makeText(this, R.string.loop_finished, Toast.LENGTH_SHORT).show();
@@ -378,7 +492,9 @@ public class LocalMediaActivity extends AppCompatActivity {
             updateLoopBadge();
         }
         if (mediaPlayer != null) {
-            mediaPlayer.seekTo(seekToMs);
+            try {
+                mediaPlayer.seekTo(seekToMs);
+            } catch (IllegalStateException ignored) {}
         }
     }
 
@@ -387,15 +503,23 @@ public class LocalMediaActivity extends AppCompatActivity {
             int seekTo = trimEnabled ? (int) trimStartMs : 0;
             handleLoopRepeat(seekTo);
             if (mediaPlayer != null && loopMode == LoopMode.ALL) {
-                mediaPlayer.start();
-                applyPlaybackSpeed();
+                try {
+                    mediaPlayer.seekTo(seekTo);
+                    mediaPlayer.start();
+                    applyPlaybackSpeed();
+                } catch (IllegalStateException ignored) {
+                    btnPlayPause.setImageResource(R.drawable.ic_play);
+                }
             }
             return;
         }
         btnPlayPause.setImageResource(R.drawable.ic_play);
+        seekBar.setProgress((int) mediaDuration);
+        tvCurrentTime.setText(TimeFormatter.format(mediaDuration));
     }
 
     private void updateActiveSubtitle(int posMs) {
+        if (subtitleLines.isEmpty()) return;
         int newActive = -1;
         for (int i = 0; i < subtitleLines.size(); i++) {
             if (subtitleLines.get(i).contains(posMs)) {
@@ -403,16 +527,13 @@ public class LocalMediaActivity extends AppCompatActivity {
                 break;
             }
         }
-        if (newActive != subtitleAdapter.getLines().indexOf(subtitleLines.get(
-                Math.max(0, newActive >= 0 ? newActive : 0)))) {
-            // simplified: just use newActive directly
-        }
-        if (newActive >= 0 && newActive != selectedLineIndex) {
-            int old = selectedLineIndex;
-            subtitleAdapter.setActiveIndex(newActive);
-            if (newActive >= 0) {
-                layoutManager.scrollToPositionWithOffset(newActive, 100);
-            }
+        // Only update + scroll when the active line actually changes — avoids
+        // re-binding the same row every tick (which felt jittery to users).
+        if (newActive == lastActiveIndex) return;
+        lastActiveIndex = newActive;
+        subtitleAdapter.setActiveIndex(newActive);
+        if (newActive >= 0) {
+            layoutManager.scrollToPositionWithOffset(newActive, 100);
         }
     }
 
@@ -442,18 +563,44 @@ public class LocalMediaActivity extends AppCompatActivity {
 
     private void bindTrim() {
         trimContainer = findViewById(R.id.trim_container);
-        trimBar = findViewById(R.id.trim_bar);
+        trimRangeSlider = findViewById(R.id.trim_range_slider);
         tvTrimStart = findViewById(R.id.tv_trim_start);
         tvTrimEnd = findViewById(R.id.tv_trim_end);
         TextView btnResetTrim = findViewById(R.id.btn_reset_trim);
         TextView btnSetTrimStart = findViewById(R.id.btn_set_trim_start);
         TextView btnSetTrimEnd = findViewById(R.id.btn_set_trim_end);
 
+        // Two thumbs on the slider give the user direct, accurate control over
+        // both trim_start and trim_end without needing the Set Start / Set End
+        // buttons. The buttons stay as a one-tap shortcut to set the value to
+        // the current playback position.
+        trimRangeSlider.addOnChangeListener((slider, value, fromUser) -> {
+            if (!fromUser || syncingTrimSlider) return;
+            List<Float> values = slider.getValues();
+            if (values.size() < 2) return;
+            long total = mediaDuration > 0 ? mediaDuration : 100L;
+            long start = (long) (values.get(0) / 100f * total);
+            long end = (long) (values.get(1) / 100f * total);
+            if (end <= start + 100) end = Math.min(total, start + 100);
+            trimStartMs = start;
+            trimEndMs = end;
+            trimEnabled = true;
+            tvTrimStart.setText(TimeFormatter.format(trimStartMs));
+            tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            updateWaveformTrimOverlay();
+        });
+
         btnSetTrimStart.setOnClickListener(v -> {
             if (mediaPlayer == null) return;
             trimStartMs = mediaPlayer.getCurrentPosition();
+            if (trimEndMs <= trimStartMs) {
+                trimEndMs = Math.min(mediaDuration, trimStartMs + 1000);
+            }
             trimEnabled = true;
             tvTrimStart.setText(TimeFormatter.format(trimStartMs));
+            tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, getString(R.string.trim_start_set, TimeFormatter.format(trimStartMs)),
                     Toast.LENGTH_SHORT).show();
         });
@@ -467,6 +614,8 @@ public class LocalMediaActivity extends AppCompatActivity {
             }
             trimEnabled = true;
             tvTrimEnd.setText(TimeFormatter.format(trimEndMs));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, getString(R.string.trim_end_set, TimeFormatter.format(trimEndMs)),
                     Toast.LENGTH_SHORT).show();
         });
@@ -477,8 +626,44 @@ public class LocalMediaActivity extends AppCompatActivity {
             trimEndMs = mediaDuration > 0 ? mediaDuration : Long.MAX_VALUE;
             tvTrimStart.setText(TimeFormatter.format(0));
             tvTrimEnd.setText(TimeFormatter.format(mediaDuration));
+            syncTrimSliderFromMs();
+            updateWaveformTrimOverlay();
             Toast.makeText(this, R.string.trim_reset, Toast.LENGTH_SHORT).show();
         });
+    }
+
+    /** Pushes the current trimStartMs/trimEndMs values into the RangeSlider as
+     *  percentages of the media duration. Guarded by syncingTrimSlider so the
+     *  addOnChangeListener doesn't fight us. */
+    private void syncTrimSliderFromMs() {
+        syncingTrimSlider = true;
+        try {
+            if (mediaDuration <= 0) {
+                trimRangeSlider.setValues(0f, 100f);
+                return;
+            }
+            float startPct = Math.max(0f,
+                    Math.min(100f, 100f * trimStartMs / (float) mediaDuration));
+            float endPct = Math.max(startPct + 0.1f,
+                    Math.min(100f, 100f * trimEndMs / (float) mediaDuration));
+            try {
+                trimRangeSlider.setValues(startPct, endPct);
+            } catch (IllegalStateException ignored) {}
+        } finally {
+            syncingTrimSlider = false;
+        }
+    }
+
+    /** Mirrors the trim region onto the audio waveform so users can see exactly
+     *  which part of the file is kept. Hidden when trim is disabled. */
+    private void updateWaveformTrimOverlay() {
+        if (!trimEnabled || mediaDuration <= 0) {
+            waveformView.setTrimRegion(-1f, -1f);
+            return;
+        }
+        waveformView.setTrimRegion(
+                (float) trimStartMs / mediaDuration,
+                (float) trimEndMs / mediaDuration);
     }
 
     // ======================== ACTION BUTTONS ========================
@@ -489,17 +674,46 @@ public class LocalMediaActivity extends AppCompatActivity {
         btnSpeed = findViewById(R.id.btn_speed);
         btnLoop = findViewById(R.id.btn_loop);
         btnLoopRange = findViewById(R.id.btn_loop_range);
+        btnWaveMode = findViewById(R.id.btn_wave_mode);
+        btnConfirmWaveLine = findViewById(R.id.btn_confirm_wave_line);
 
         btnSetStart.setOnClickListener(v -> onSetStart());
         btnSetEnd.setOnClickListener(v -> onSetEnd());
         btnSpeed.setOnClickListener(v -> showSpeedMenu());
         btnLoop.setOnClickListener(v -> onLoopClicked());
         btnLoopRange.setOnClickListener(v -> onLoopRangeClicked());
+        btnWaveMode.setOnClickListener(v -> toggleWaveTapMode());
+        btnConfirmWaveLine.setOnClickListener(v -> confirmWaveTapLine());
     }
 
     private void onSetStart() {
         if (mediaPlayer == null) {
             Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Auto-pick the first line that doesn't have a timestamp yet so the user can
+        // assign Start/End to imported sub lines without having to tap them first.
+        if (subPool.isEmpty()
+                && (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size())) {
+            int autoIdx = findFirstUntimedLine();
+            if (autoIdx >= 0) {
+                selectedLineIndex = autoIdx;
+                subtitleAdapter.setActiveIndex(autoIdx);
+                layoutManager.scrollToPositionWithOffset(autoIdx, 100);
+            }
+        }
+        if (waveTapMode) {
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // Switch the next-tap target to START. Repeated taps on the
+            // waveform will keep updating the start until the user switches
+            // to END or hits Confirm.
+            waveTapTarget = WaveTapTarget.START;
+            btnSetStart.setSelected(true);
+            btnSetEnd.setSelected(false);
+            Toast.makeText(this, R.string.wave_mode_set_start, Toast.LENGTH_SHORT).show();
             return;
         }
         long startMs = mediaPlayer.getCurrentPosition();
@@ -511,9 +725,28 @@ public class LocalMediaActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT).show();
     }
 
+    private int findFirstUntimedLine() {
+        for (int i = 0; i < subtitleLines.size(); i++) {
+            if (!subtitleLines.get(i).hasTimestamp()) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private void onSetEnd() {
         if (mediaPlayer == null) {
             Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapMode) {
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            waveTapTarget = WaveTapTarget.END;
+            btnSetEnd.setSelected(true);
+            Toast.makeText(this, R.string.wave_mode_set_end, Toast.LENGTH_SHORT).show();
             return;
         }
         Object startTag = btnSetStart.getTag();
@@ -528,23 +761,32 @@ public class LocalMediaActivity extends AppCompatActivity {
             return;
         }
 
-        // If sub pool is active, show pool picker dialog
-        if (!subPool.isEmpty()) {
+        // If sub pool has any unused entries, show the pool picker dialog.
+        // (Pool entries are now hidden, not removed, when used — so checking
+        // !subPool.isEmpty() would block normal subtitle creation forever.)
+        if (hasUnusedPoolEntries()) {
             showSubPoolPicker(startMs, endMs);
         } else if (selectedLineIndex >= 0 && selectedLineIndex < subtitleLines.size()) {
             // Assign to selected line
             SubtitleLine line = subtitleLines.get(selectedLineIndex);
             line.startMs = startMs;
             line.endMs = endMs;
-            subtitleAdapter.notifyItemChanged(selectedLineIndex);
-            autoSaveSubtitles();
-
-            // Move to next line
-            if (selectedLineIndex + 1 < subtitleLines.size()) {
-                selectedLineIndex++;
-                subtitleAdapter.setActiveIndex(selectedLineIndex);
-                layoutManager.scrollToPositionWithOffset(selectedLineIndex, 100);
+            // Re-sort so the newly-timed line lands in chronological order.
+            sortLinesByTime();
+            // Find the next untimed line (if any) so the user can keep going.
+            int nextUntimed = findFirstUntimedLine();
+            if (nextUntimed >= 0) {
+                selectedLineIndex = nextUntimed;
+                subtitleAdapter.setActiveIndex(nextUntimed);
+                layoutManager.scrollToPositionWithOffset(nextUntimed, 100);
+            } else {
+                // No more untimed lines: just keep the currently-edited line selected.
+                selectedLineIndex = subtitleLines.indexOf(line);
+                if (selectedLineIndex >= 0) {
+                    subtitleAdapter.setActiveIndex(selectedLineIndex);
+                }
             }
+            autoSaveSubtitles();
         } else {
             // Create new line with input dialog
             showNewSubtitleDialog(startMs, endMs);
@@ -557,8 +799,14 @@ public class LocalMediaActivity extends AppCompatActivity {
     }
 
     private void showSubPoolPicker(long startMs, long endMs) {
+        // Show only unused entries
+        List<SubPoolAdapter.PoolEntry> available = new ArrayList<>();
+        for (SubPoolAdapter.PoolEntry e : subPool) {
+            if (!e.used) available.add(e);
+        }
+
         SubPoolAdapter poolAdapter = new SubPoolAdapter();
-        poolAdapter.setEntries(new ArrayList<>(subPool));
+        poolAdapter.setEntries(available);
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
@@ -587,19 +835,33 @@ public class LocalMediaActivity extends AppCompatActivity {
                         merged.append(entry.text);
                     }
 
-                    // Add to subtitle lines
+                    // Add to subtitle lines (and sort so it lands in chronological order)
                     SubtitleLine newLine = new SubtitleLine(startMs, endMs, merged.toString());
-                    subtitleLines.add(newLine);
-                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
-
-                    // Remove used entries from pool
+                    // Remember which pool entries were merged into this line so
+                    // we can restore *exactly* those entries (not random
+                    // substring matches) if the user deletes the line later.
                     for (SubPoolAdapter.PoolEntry entry : selected) {
-                        subPool.removeIf(e -> e.originalIndex == entry.originalIndex);
+                        newLine.sourcePoolIndices.add(entry.originalIndex);
+                    }
+                    subtitleLines.add(newLine);
+                    sortLinesByTime();
+
+                    // Mark used entries (hide, not delete)
+                    for (SubPoolAdapter.PoolEntry entry : selected) {
+                        for (SubPoolAdapter.PoolEntry poolEntry : subPool) {
+                            if (poolEntry.originalIndex == entry.originalIndex) {
+                                poolEntry.used = true;
+                            }
+                        }
                     }
 
                     autoSaveSubtitles();
 
-                    if (subPool.isEmpty()) {
+                    boolean allUsed = true;
+                    for (SubPoolAdapter.PoolEntry e : subPool) {
+                        if (!e.used) { allUsed = false; break; }
+                    }
+                    if (allUsed) {
                         Toast.makeText(this, R.string.pool_completed, Toast.LENGTH_SHORT).show();
                     }
                 })
@@ -618,20 +880,65 @@ public class LocalMediaActivity extends AppCompatActivity {
         container.setPadding(paddingPx, paddingPx / 2, paddingPx, 0);
         container.addView(input);
 
+        final boolean isManualAdd = startMs < 0 || endMs < 0;
+        String title = isManualAdd
+                ? getString(R.string.action_add_line)
+                : getString(R.string.new_subtitle_title,
+                        TimeFormatter.format(startMs), TimeFormatter.format(endMs));
+
         new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.new_subtitle_title,
-                        TimeFormatter.format(startMs), TimeFormatter.format(endMs)))
+                .setTitle(title)
                 .setView(container)
                 .setPositiveButton(R.string.action_add, (d, w) -> {
                     String text = input.getText() != null ? input.getText().toString().trim() : "";
                     if (text.isEmpty()) return;
                     SubtitleLine line = new SubtitleLine(startMs, endMs, text);
                     subtitleLines.add(line);
-                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    if (isManualAdd) {
+                        // Append + select the new line so the global Set Start /
+                        // Set End buttons can target it without needing to long-press.
+                        subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                        int newIdx = subtitleLines.size() - 1;
+                        selectedLineIndex = newIdx;
+                        lastActiveIndex = newIdx;
+                        subtitleAdapter.setActiveIndex(newIdx);
+                        layoutManager.scrollToPositionWithOffset(newIdx, 100);
+                        Toast.makeText(this, R.string.added_line_use_start_end,
+                                Toast.LENGTH_LONG).show();
+                    } else {
+                        // Has timestamps: keep the list sorted by start time.
+                        sortLinesByTime();
+                    }
                     autoSaveSubtitles();
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
+    }
+
+    /** Sorts {@link #subtitleLines} by start time ascending. Lines without a
+     *  timestamp are kept at the end (in their original relative order, since
+     *  Java's {@code List.sort} is stable). The currently-selected line keeps
+     *  pointing at the same {@link SubtitleLine} instance after sorting. */
+    private void sortLinesByTime() {
+        SubtitleLine selected =
+                (selectedLineIndex >= 0 && selectedLineIndex < subtitleLines.size())
+                        ? subtitleLines.get(selectedLineIndex)
+                        : null;
+        Collections.sort(subtitleLines, (a, b) -> {
+            long ka = a.hasTimestamp() ? a.startMs : Long.MAX_VALUE;
+            long kb = b.hasTimestamp() ? b.startMs : Long.MAX_VALUE;
+            return Long.compare(ka, kb);
+        });
+        if (selected != null) {
+            selectedLineIndex = subtitleLines.indexOf(selected);
+        }
+        subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+        if (selectedLineIndex >= 0) {
+            subtitleAdapter.setActiveIndex(selectedLineIndex);
+            lastActiveIndex = selectedLineIndex;
+        } else {
+            lastActiveIndex = -1;
+        }
     }
 
     // ======================== SPEED ========================
@@ -640,7 +947,7 @@ public class LocalMediaActivity extends AppCompatActivity {
         PopupMenu popup = new PopupMenu(this, btnSpeed);
         float[] speeds = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
         for (float s : speeds) {
-            String label = s == 1.0f ? "1x" : String.format("%.2fx", s).replaceAll("0+$", "").replaceAll("\\.$", "");
+            String label = s == 1.0f ? "1x" : String.format(java.util.Locale.US, "%.2f", s).replaceAll("0+$", "").replaceAll("\\.$", "") + "x";
             popup.getMenu().add(label).setOnMenuItemClickListener(item -> {
                 playbackSpeed = s;
                 applyPlaybackSpeed();
@@ -867,6 +1174,7 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         subtitleAdapter.setOnLineClickListener((position, line) -> {
             selectedLineIndex = position;
+            lastActiveIndex = position;
             subtitleAdapter.setActiveIndex(position);
             if (line.hasTimestamp() && mediaPlayer != null) {
                 mediaPlayer.seekTo((int) line.startMs);
@@ -881,24 +1189,48 @@ public class LocalMediaActivity extends AppCompatActivity {
         subtitleAdapter.setOnLineLongClickListener((position, line) -> {
             showLineOptionsDialog(position, line);
         });
+
+        subtitleAdapter.setOnTimeAdjustListener(new LocalSubtitleAdapter.OnTimeAdjustListener() {
+            @Override
+            public void onAdjustStart(int position, SubtitleLine line, long deltaMs) {
+                long maxStart = line.endMs > 0 ? line.endMs - 100 : Long.MAX_VALUE;
+                long newStart = Math.max(0, Math.min(maxStart, line.startMs + deltaMs));
+                line.startMs = newStart;
+                subtitleAdapter.notifyItemChanged(position);
+                autoSaveSubtitles();
+            }
+
+            @Override
+            public void onAdjustEnd(int position, SubtitleLine line, long deltaMs) {
+                long maxEnd = mediaDuration > 0 ? mediaDuration : Long.MAX_VALUE;
+                long minEnd = line.startMs >= 0 ? line.startMs + 100 : 0;
+                long newEnd = Math.max(minEnd, Math.min(maxEnd, line.endMs + deltaMs));
+                line.endMs = newEnd;
+                subtitleAdapter.notifyItemChanged(position);
+                autoSaveSubtitles();
+            }
+        });
     }
 
     private void showLineOptionsDialog(int position, SubtitleLine line) {
         String[] options = {
+                getString(R.string.option_copy_text),
                 getString(R.string.option_edit_text),
                 getString(R.string.option_edit_timestamp),
                 getString(R.string.option_delete),
                 getString(R.string.option_loop_this),
-                getString(R.string.option_set_range_start)
+                getString(R.string.option_set_range_start),
+                getString(R.string.option_set_range_end)
         };
         new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.line_options_title, position + 1))
                 .setItems(options, (d, which) -> {
                     switch (which) {
-                        case 0: editLineText(position, line); break;
-                        case 1: editLineTimestamp(position, line); break;
-                        case 2: deleteLine(position); break;
-                        case 3:
+                        case 0: copyLineText(line); break;
+                        case 1: editLineText(position, line); break;
+                        case 2: editLineTimestamp(position, line); break;
+                        case 3: deleteLine(position); break;
+                        case 4:
                             if (line.hasTimestamp()) {
                                 selectedLineIndex = position;
                                 showLoopCountDialog(LoopMode.SINGLE, position, position);
@@ -906,14 +1238,62 @@ public class LocalMediaActivity extends AppCompatActivity {
                                 Toast.makeText(this, R.string.line_no_timestamp, Toast.LENGTH_SHORT).show();
                             }
                             break;
-                        case 4:
+                        case 5:
+                            // Mark this line as the start of a new range.
+                            // Reset the end so we don't accidentally re-use a
+                            // stale endpoint from a previous range.
+                            if (!line.hasTimestamp()) {
+                                Toast.makeText(this, R.string.line_no_timestamp,
+                                        Toast.LENGTH_SHORT).show();
+                                break;
+                            }
                             loopRangeStart = position;
+                            loopRangeEnd = -1;
                             Toast.makeText(this, getString(R.string.range_start_set, position + 1),
-                                    Toast.LENGTH_SHORT).show();
+                                    Toast.LENGTH_LONG).show();
+                            break;
+                        case 6:
+                            commitRangeEnd(position, line);
                             break;
                     }
                 })
                 .show();
+    }
+
+    /** Commits the second tap of a "long-press → loop range" gesture. The
+     *  user has already long-pressed line A and chosen "bắt đầu", which
+     *  stored {@code loopRangeStart}. Now they long-pressed line B and
+     *  chose "kết thúc"; we validate, swap if A is after B, and open the
+     *  loop-count picker. */
+    private void commitRangeEnd(int position, SubtitleLine endLine) {
+        if (loopRangeStart < 0 || loopRangeStart >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.range_start_first, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!endLine.hasTimestamp()) {
+            Toast.makeText(this, R.string.line_no_timestamp, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SubtitleLine startLine = subtitleLines.get(loopRangeStart);
+        if (!startLine.hasTimestamp()) {
+            Toast.makeText(this, R.string.range_no_timestamp, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int from = loopRangeStart;
+        int to = position;
+        if (from > to) {
+            int tmp = from; from = to; to = tmp;
+        }
+        showLoopCountDialog(LoopMode.RANGE, from, to);
+    }
+
+    private void copyLineText(SubtitleLine line) {
+        if (line == null || line.text == null) return;
+        ClipboardManager cm =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(ClipData.newPlainText("subtitle", line.text));
+        Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show();
     }
 
     private void editLineText(int position, SubtitleLine line) {
@@ -942,47 +1322,378 @@ public class LocalMediaActivity extends AppCompatActivity {
     }
 
     private void editLineTimestamp(int position, SubtitleLine line) {
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_edit_timestamp, null);
-        EditText etStart = dialogView.findViewById(R.id.et_start_ms);
-        EditText etEnd = dialogView.findViewById(R.id.et_end_ms);
+        // Build a small dialog with two human-readable time fields and "Hiện tại"
+        // shortcut buttons that fill in the current playback position. Far
+        // friendlier than typing milliseconds.
+        int paddingPx = (int) (getResources().getDisplayMetrics().density * 16);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(paddingPx, paddingPx, paddingPx, 0);
 
-        if (line.startMs >= 0) etStart.setText(String.valueOf(line.startMs));
-        if (line.endMs >= 0) etEnd.setText(String.valueOf(line.endMs));
+        EditText etStart = new EditText(this);
+        etStart.setHint(R.string.start_ms_label);
+        etStart.setInputType(InputType.TYPE_CLASS_TEXT);
+        if (line.startMs >= 0) etStart.setText(TimeFormatter.formatPrecise(line.startMs));
+
+        EditText etEnd = new EditText(this);
+        etEnd.setHint(R.string.end_ms_label);
+        etEnd.setInputType(InputType.TYPE_CLASS_TEXT);
+        if (line.endMs >= 0) etEnd.setText(TimeFormatter.formatPrecise(line.endMs));
+
+        TextView btnUseStart = new TextView(this);
+        btnUseStart.setText(R.string.action_use_current);
+        btnUseStart.setTextColor(getColor(R.color.brand_primary));
+        btnUseStart.setPadding(paddingPx / 2, paddingPx / 4, paddingPx / 2, paddingPx / 4);
+        btnUseStart.setOnClickListener(v -> {
+            if (mediaPlayer != null) {
+                etStart.setText(TimeFormatter.formatPrecise(mediaPlayer.getCurrentPosition()));
+            }
+        });
+
+        TextView btnUseEnd = new TextView(this);
+        btnUseEnd.setText(R.string.action_use_current);
+        btnUseEnd.setTextColor(getColor(R.color.brand_primary));
+        btnUseEnd.setPadding(paddingPx / 2, paddingPx / 4, paddingPx / 2, paddingPx / 4);
+        btnUseEnd.setOnClickListener(v -> {
+            if (mediaPlayer != null) {
+                etEnd.setText(TimeFormatter.formatPrecise(mediaPlayer.getCurrentPosition()));
+            }
+        });
+
+        TextView lblStart = new TextView(this);
+        lblStart.setText(R.string.start_ms_label);
+        lblStart.setTextColor(getColor(R.color.text_primary));
+        TextView lblEnd = new TextView(this);
+        lblEnd.setText(R.string.end_ms_label);
+        lblEnd.setTextColor(getColor(R.color.text_primary));
+        TextView hint = new TextView(this);
+        hint.setText(R.string.edit_timestamp_hint);
+        hint.setTextSize(11f);
+        hint.setTextColor(getColor(R.color.text_secondary));
+
+        root.addView(lblStart);
+        LinearLayout startRow = new LinearLayout(this);
+        startRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams etParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        startRow.addView(etStart, etParams);
+        startRow.addView(btnUseStart);
+        root.addView(startRow);
+
+        root.addView(lblEnd);
+        LinearLayout endRow = new LinearLayout(this);
+        endRow.setOrientation(LinearLayout.HORIZONTAL);
+        endRow.addView(etEnd, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        endRow.addView(btnUseEnd);
+        root.addView(endRow);
+
+        root.addView(hint);
 
         new AlertDialog.Builder(this)
                 .setTitle(R.string.edit_timestamp_title)
-                .setView(dialogView)
+                .setView(root)
                 .setPositiveButton(R.string.action_save, (d, w) -> {
-                    try {
-                        long start = Long.parseLong(etStart.getText().toString().trim());
-                        long end = Long.parseLong(etEnd.getText().toString().trim());
-                        if (end > start) {
-                            line.startMs = start;
-                            line.endMs = end;
-                            subtitleAdapter.notifyItemChanged(position);
-                            autoSaveSubtitles();
-                        }
-                    } catch (NumberFormatException ignored) {}
-                })
-                .setNegativeButton(R.string.action_cancel, null)
-                .show();
-    }
-
-    private void deleteLine(int position) {
-        new AlertDialog.Builder(this)
-                .setMessage(R.string.delete_line_confirm)
-                .setPositiveButton(R.string.action_delete, (d, w) -> {
-                    subtitleLines.remove(position);
-                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    long start = parseHumanTime(etStart.getText().toString().trim());
+                    long end = parseHumanTime(etEnd.getText().toString().trim());
+                    if (start < 0 || end < 0 || end <= start) {
+                        Toast.makeText(this, R.string.invalid_time_format,
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    line.startMs = start;
+                    line.endMs = end;
+                    sortLinesByTime();
                     autoSaveSubtitles();
                 })
                 .setNegativeButton(R.string.action_cancel, null)
                 .show();
     }
 
+    /**
+     * Parses a user-typed time string into milliseconds. Accepts:
+     * raw ms ("12500"), seconds ("12.5"), "M:SS", "M:SS.mmm", "H:MM:SS",
+     * "H:MM:SS.mmm". Returns -1 on parse failure.
+     */
+    private static long parseHumanTime(String s) {
+        if (s == null) return -1;
+        s = s.trim();
+        if (s.isEmpty()) return -1;
+        try {
+            // Pure integer = milliseconds (back-compat with the old dialog).
+            if (s.matches("\\d+")) {
+                return Long.parseLong(s);
+            }
+            String[] parts = s.split(":");
+            double hours = 0, minutes = 0, seconds;
+            if (parts.length == 1) {
+                seconds = Double.parseDouble(parts[0]);
+            } else if (parts.length == 2) {
+                minutes = Long.parseLong(parts[0]);
+                seconds = Double.parseDouble(parts[1]);
+            } else if (parts.length == 3) {
+                hours = Long.parseLong(parts[0]);
+                minutes = Long.parseLong(parts[1]);
+                seconds = Double.parseDouble(parts[2]);
+            } else {
+                return -1;
+            }
+            double total = hours * 3600 + minutes * 60 + seconds;
+            if (total < 0) return -1;
+            return Math.round(total * 1000);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private void deleteLine(int position) {
+        new AlertDialog.Builder(this)
+                .setMessage(R.string.delete_line_confirm)
+                .setPositiveButton(R.string.action_delete, (d, w) -> {
+                    SubtitleLine removed = subtitleLines.remove(position);
+                    // Reset selection/active tracking — the indices we cached
+                    // may now point at the wrong line (or past the end).
+                    if (selectedLineIndex == position) {
+                        selectedLineIndex = -1;
+                    } else if (selectedLineIndex > position) {
+                        selectedLineIndex--;
+                    }
+                    lastActiveIndex = -1;
+                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    if (selectedLineIndex >= 0) {
+                        subtitleAdapter.setActiveIndex(selectedLineIndex);
+                    }
+                    autoSaveSubtitles();
+
+                    // Restore matching pool entries so user can re-pick them.
+                    // Uses the explicit source-pool indices captured when the
+                    // line was created from the pool, so we restore *exactly*
+                    // those entries (no substring false positives).
+                    restorePoolEntries(removed);
+                })
+                .setNegativeButton(R.string.action_cancel, null)
+                .show();
+    }
+
+    private void clearAllSubtitles() {
+        if (subtitleLines.isEmpty()) {
+            Toast.makeText(this, R.string.no_subs_to_clear, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int count = subtitleLines.size();
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.clear_all_confirm_title)
+                .setMessage(getString(R.string.clear_all_confirm_message, count))
+                .setPositiveButton(R.string.action_delete, (d, w) -> {
+                    subtitleLines.clear();
+                    selectedLineIndex = -1;
+                    lastActiveIndex = -1;
+                    // Reset any pool "used" flags so the user can re-assign
+                    // bulk-pasted entries from scratch.
+                    for (SubPoolAdapter.PoolEntry entry : subPool) {
+                        entry.used = false;
+                    }
+                    clearLoop();
+                    subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
+                    subtitleAdapter.setActiveIndex(-1);
+                    autoSaveSubtitles();
+                    Toast.makeText(this, R.string.cleared_all_subs,
+                            Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton(R.string.action_cancel, null)
+                .show();
+    }
+
+    /** Restores pool entries that were the source of a deleted subtitle line.
+     *  Uses the explicit {@code sourcePoolIndices} list captured when the line
+     *  was created, so we never restore unrelated entries that just happened
+     *  to be substring matches. Falls back to the legacy substring check for
+     *  legacy lines / lines loaded from the database that don't carry the
+     *  source-index list. */
+    private void restorePoolEntries(SubtitleLine deletedLine) {
+        if (subPool.isEmpty() || deletedLine == null) return;
+        if (!deletedLine.sourcePoolIndices.isEmpty()) {
+            for (SubPoolAdapter.PoolEntry entry : subPool) {
+                if (entry.used && deletedLine.sourcePoolIndices.contains(entry.originalIndex)) {
+                    entry.used = false;
+                }
+            }
+            return;
+        }
+        // Legacy path: no source indices recorded — fall back to text match.
+        String deletedText = deletedLine.text;
+        if (deletedText == null) return;
+        for (SubPoolAdapter.PoolEntry entry : subPool) {
+            if (entry.used && deletedText.contains(entry.text)) {
+                entry.used = false;
+            }
+        }
+    }
+
+    private boolean hasUnusedPoolEntries() {
+        if (subPool.isEmpty()) return false;
+        for (SubPoolAdapter.PoolEntry entry : subPool) {
+            if (!entry.used) return true;
+        }
+        return false;
+    }
+
+    // ======================== WAVE-TAP MODE ========================
+
+    /** Routes a waveform tap (in ms) into the current Set-Start / Set-End
+     *  picker. Each tap overwrites the previously-picked value, seeks the
+     *  player to that position, and starts playback so the user can audition
+     *  the spot before deciding whether the marker is on the right beat. */
+    private void onWaveTap(int posMs) {
+        if (mediaDuration <= 0) return;
+        if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapTarget == WaveTapTarget.START) {
+            waveTapStartMs = posMs;
+            waveformView.setStartMarker((float) posMs / mediaDuration);
+            Toast.makeText(this, getString(R.string.wave_mode_start_at,
+                    TimeFormatter.format(posMs)), Toast.LENGTH_SHORT).show();
+        } else if (waveTapTarget == WaveTapTarget.END) {
+            waveTapEndMs = posMs;
+            waveformView.setEndMarker((float) posMs / mediaDuration);
+            Toast.makeText(this, getString(R.string.wave_mode_end_at,
+                    TimeFormatter.format(posMs)), Toast.LENGTH_SHORT).show();
+        } else {
+            return;
+        }
+        // Seek to the tapped position and resume playback so the user can
+        // hear what's at that spot. Clamp to known duration to avoid the
+        // MediaPlayer error that some devices throw at the very tail.
+        if (mediaPlayer != null) {
+            int seekTo = posMs;
+            if (mediaDuration > 0 && seekTo > mediaDuration - 50) {
+                seekTo = (int) Math.max(0, mediaDuration - 50);
+            }
+            try {
+                mediaPlayer.seekTo(seekTo);
+                if (!mediaPlayer.isPlaying()) {
+                    mediaPlayer.start();
+                    applyPlaybackSpeed();
+                    btnPlayPause.setImageResource(R.drawable.ic_pause);
+                }
+            } catch (IllegalStateException ignored) {}
+            // Update UI immediately so the seekbar / current-time / waveform
+            // progress reflect the tap even before the next 250ms tick.
+            seekBar.setProgress(seekTo);
+            tvCurrentTime.setText(TimeFormatter.format(seekTo));
+            waveformView.setProgress((float) seekTo / mediaDuration);
+        }
+    }
+
+    private void toggleWaveTapMode() {
+        waveTapMode = !waveTapMode;
+        btnWaveMode.setSelected(waveTapMode);
+        btnWaveMode.setText(waveTapMode
+                ? R.string.action_wave_mode_on
+                : R.string.action_wave_mode);
+        btnConfirmWaveLine.setVisibility(waveTapMode ? View.VISIBLE : View.GONE);
+        if (waveTapMode) {
+            // Pre-select the first untimed line so Set Start / Set End have a
+            // target without forcing the user to long-press one first.
+            if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+                int autoIdx = findFirstUntimedLine();
+                if (autoIdx >= 0) {
+                    selectedLineIndex = autoIdx;
+                    subtitleAdapter.setActiveIndex(autoIdx);
+                    layoutManager.scrollToPositionWithOffset(autoIdx, 100);
+                }
+            }
+            Toast.makeText(this, R.string.wave_mode_enabled, Toast.LENGTH_LONG).show();
+        } else {
+            clearWaveTapState();
+            Toast.makeText(this, R.string.wave_mode_disabled, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Wipes any in-progress wave-tap selection and resets the visual state. */
+    private void clearWaveTapState() {
+        waveTapTarget = WaveTapTarget.NONE;
+        waveTapStartMs = -1;
+        waveTapEndMs = -1;
+        if (waveformView != null) {
+            waveformView.setStartMarker(-1f);
+            waveformView.setEndMarker(-1f);
+        }
+        if (btnSetStart != null) {
+            btnSetStart.setSelected(false);
+            btnSetStart.setText(R.string.action_set_start);
+            btnSetStart.setTag(null);
+        }
+        if (btnSetEnd != null) {
+            btnSetEnd.setSelected(false);
+        }
+    }
+
+    private void confirmWaveTapLine() {
+        if (!waveTapMode) return;
+        if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.wave_mode_no_line, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapStartMs < 0) {
+            Toast.makeText(this, R.string.wave_mode_need_start, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapEndMs < 0) {
+            Toast.makeText(this, R.string.wave_mode_need_end, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (waveTapEndMs <= waveTapStartMs) {
+            Toast.makeText(this, R.string.wave_mode_invalid, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SubtitleLine line = subtitleLines.get(selectedLineIndex);
+        line.startMs = waveTapStartMs;
+        line.endMs = waveTapEndMs;
+        sortLinesByTime();
+        autoSaveSubtitles();
+
+        // Reset scratch state and markers for the next line.
+        waveTapTarget = WaveTapTarget.NONE;
+        waveTapStartMs = -1;
+        waveTapEndMs = -1;
+        waveformView.setStartMarker(-1f);
+        waveformView.setEndMarker(-1f);
+        btnSetStart.setSelected(false);
+        btnSetEnd.setSelected(false);
+
+        int next = findFirstUntimedLine();
+        if (next >= 0) {
+            selectedLineIndex = next;
+            subtitleAdapter.setActiveIndex(next);
+            layoutManager.scrollToPositionWithOffset(next, 100);
+            Toast.makeText(this, R.string.wave_mode_confirmed, Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, R.string.wave_mode_all_done, Toast.LENGTH_SHORT).show();
+        }
+    }
+
     // ======================== BOTTOM ACTIONS ========================
 
     private void bindBottomActions() {
+        // Apply system gesture / nav-bar insets to the bottom action row so
+        // the buttons (Open file, Paste sub, Share, …) don't sit underneath
+        // the system "swipe to multitask" gesture area at the bottom edge.
+        View bottomScroll = findViewById(R.id.bottom_action_scroll);
+        if (bottomScroll != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(bottomScroll, (v, insets) -> {
+                int inset = insets.getInsets(
+                        WindowInsetsCompat.Type.systemBars()
+                                | WindowInsetsCompat.Type.systemGestures()
+                ).bottom;
+                v.setPadding(v.getPaddingLeft(), v.getPaddingTop(),
+                        v.getPaddingRight(), inset);
+                return insets;
+            });
+        }
+
         findViewById(R.id.btn_add_line).setOnClickListener(v -> {
             if (mediaPlayer == null) {
                 Toast.makeText(this, R.string.error_no_media, Toast.LENGTH_SHORT).show();
@@ -1019,6 +1730,8 @@ public class LocalMediaActivity extends AppCompatActivity {
 
         findViewById(R.id.btn_open_file).setOnClickListener(v ->
                 mediaPickerLauncher.launch(new String[]{"audio/*", "video/*"}));
+
+        findViewById(R.id.btn_clear_all).setOnClickListener(v -> clearAllSubtitles());
     }
 
     // ======================== PASTE SUB (BULK) ========================
@@ -1221,17 +1934,19 @@ public class LocalMediaActivity extends AppCompatActivity {
         SubToolApp.get().getDbExecutor().execute(() -> {
             LocalSubtitleDao dao = SubToolApp.get().getDatabase().localSubtitleDao();
             List<LocalSubtitleEntity> entities = dao.getByMediaUri(uri.toString());
-            if (entities != null && !entities.isEmpty()) {
-                List<SubtitleLine> loaded = new ArrayList<>();
-                for (LocalSubtitleEntity e : entities) {
-                    loaded.add(new SubtitleLine(e.startMs, e.endMs, e.text));
-                }
-                runOnUiThread(() -> {
-                    subtitleLines.clear();
-                    subtitleLines.addAll(loaded);
+            runOnUiThread(() -> {
+                subtitleLines.clear();
+                selectedLineIndex = -1;
+                lastActiveIndex = -1;
+                if (entities != null && !entities.isEmpty()) {
+                    for (LocalSubtitleEntity e : entities) {
+                        subtitleLines.add(new SubtitleLine(e.startMs, e.endMs, e.text));
+                    }
+                    sortLinesByTime();
+                } else {
                     subtitleAdapter.setLines(new ArrayList<>(subtitleLines));
-                });
-            }
+                }
+            });
         });
     }
 

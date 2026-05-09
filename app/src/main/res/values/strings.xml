@@ -95,7 +95,8 @@
     <string name="option_edit_timestamp">Sửa thời gian</string>
     <string name="option_delete">Xóa dòng</string>
     <string name="option_loop_this">Lặp câu này</string>
-    <string name="option_set_range_start">Đặt làm đầu đoạn lặp</string>
+    <string name="option_set_range_start">Lặp đoạn — bắt đầu từ câu này</string>
+    <string name="option_set_range_end">Lặp đoạn — kết thúc tại câu này</string>
 
     <!-- Edit -->
     <string name="edit_text_title">Sửa nội dung sub</string>
@@ -103,7 +104,8 @@
     <string name="start_ms_label">Bắt đầu (ms):</string>
     <string name="end_ms_label">Kết thúc (ms):</string>
     <string name="delete_line_confirm">Xóa dòng sub này?</string>
-    <string name="range_start_set">Đã đặt câu %d làm đầu đoạn lặp</string>
+    <string name="range_start_set">Đã đặt câu %d làm đầu đoạn lặp. Nhấn giữ câu khác và chọn “kết thúc tại câu này” để chốt đoạn.</string>
+    <string name="range_start_first">Hãy nhấn giữ một câu khác và chọn “Lặp đoạn — bắt đầu từ câu này” trước.</string>
 
     <!-- Import/Export -->
     <string name="import_empty">File trống, không có dữ liệu</string>
@@ -122,4 +124,70 @@
     <!-- Errors -->
     <string name="error_open_file">Không thể mở file này</string>
     <string name="error_no_media">Hãy mở file media trước</string>
+
+    <!-- Subtitle line time-adjust controls -->
+    <string name="label_adjust_start">Đầu</string>
+    <string name="label_adjust_end">Cuối</string>
+    <string name="desc_decrease_start">Giảm thời gian bắt đầu</string>
+    <string name="desc_increase_start">Tăng thời gian bắt đầu</string>
+    <string name="desc_decrease_end">Giảm thời gian kết thúc</string>
+    <string name="desc_increase_end">Tăng thời gian kết thúc</string>
+
+    <!-- Clear all -->
+    <string name="action_clear_all">Xóa tất cả</string>
+    <string name="clear_all_confirm_title">Xóa toàn bộ sub?</string>
+    <string name="clear_all_confirm_message">Toàn bộ %d dòng sub sẽ bị xóa. Bạn có chắc muốn làm lại từ đầu?</string>
+    <string name="cleared_all_subs">Đã xóa toàn bộ sub</string>
+    <string name="no_subs_to_clear">Chưa có sub nào để xóa</string>
+
+    <!-- Copy text -->
+    <string name="option_copy_text">Sao chép nội dung</string>
+    <string name="copied_to_clipboard">Đã sao chép</string>
+
+    <!-- Manual add hint -->
+    <string name="added_line_use_start_end">Câu mới đã chọn — nhấn Bắt đầu / Kết thúc để gán thời gian</string>
+
+    <!-- Edit timestamp dialog (improved) -->
+    <string name="edit_timestamp_hint">Định dạng: phút:giây hoặc giờ:phút:giây (ví dụ 1:23 hoặc 1:02:03.500)</string>
+    <string name="action_use_current">Hiện tại</string>
+    <string name="invalid_time_format">Định dạng thời gian không hợp lệ</string>
+
+    <!-- Main launcher screen -->
+    <string name="title_main">SubTool</string>
+    <string name="main_subtitle">Tạo phụ đề từ file audio/video local</string>
+    <string name="action_pick_file">Chọn file audio / video</string>
+    <string name="action_open_history">Lịch sử file đã mở</string>
+    <string name="action_settings">Cài đặt</string>
+
+    <!-- Settings -->
+    <string name="title_settings">Cài đặt</string>
+    <string name="settings_section_playback">Phát lại</string>
+    <string name="settings_skip_step_label">Bước tua tới / lùi</string>
+    <string name="settings_skip_step_summary">Mỗi lần nhấn ⏪ / ⏩ sẽ dịch chuyển: %s</string>
+    <string name="settings_skip_step_dialog_title">Chọn bước tua</string>
+    <string name="settings_skip_step_custom">Tùy chỉnh…</string>
+    <string name="settings_skip_step_custom_title">Bước tua tùy chỉnh (giây)</string>
+    <string name="settings_invalid_value">Giá trị không hợp lệ</string>
+    <string name="settings_saved">Đã lưu cài đặt</string>
+
+    <!-- Trim improvements -->
+    <string name="trim_drag_hint">Kéo 2 đầu thanh trim để chỉnh chính xác. Vùng đã trim hiển thị trên sóng.</string>
+
+    <!-- Wave-tap mode (assign start/end by tapping waveform) -->
+    <string name="action_wave_mode">Sub bằng sóng</string>
+    <string name="action_wave_mode_on">Sóng: BẬT</string>
+    <string name="action_confirm_line">Xác nhận</string>
+    <string name="wave_mode_enabled">Bật chế độ tap-sóng. Nhấn Bắt đầu rồi tap lên sóng audio.</string>
+    <string name="wave_mode_disabled">Tắt chế độ tap-sóng</string>
+    <string name="wave_mode_set_start">Tap lên sóng audio để chọn Bắt đầu (tap lại sẽ cập nhật)</string>
+    <string name="wave_mode_set_end">Tap lên sóng audio để chọn Kết thúc (tap lại sẽ cập nhật)</string>
+    <string name="wave_mode_start_at">Bắt đầu: %s</string>
+    <string name="wave_mode_end_at">Kết thúc: %s</string>
+    <string name="wave_mode_no_target">Hãy nhấn Bắt đầu hoặc Kết thúc trước</string>
+    <string name="wave_mode_no_line">Chưa có dòng sub nào để gán</string>
+    <string name="wave_mode_need_start">Hãy chọn Bắt đầu trên sóng trước</string>
+    <string name="wave_mode_need_end">Hãy chọn Kết thúc trên sóng trước</string>
+    <string name="wave_mode_invalid">Bắt đầu phải nhỏ hơn Kết thúc</string>
+    <string name="wave_mode_confirmed">Đã chốt câu sub. Tiếp tục với câu kế tiếp.</string>
+    <string name="wave_mode_all_done">Đã gán hết tất cả các dòng sub</string>
 </resources>

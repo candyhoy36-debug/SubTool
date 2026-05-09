@@ -24,14 +24,16 @@ import java.util.Set;
  */
 public class SubPoolAdapter extends RecyclerView.Adapter<SubPoolAdapter.ViewHolder> {
 
-    /** One entry in the pool — carries the original index so we can remove it later. */
+    /** One entry in the pool. {@code used} marks entries already assigned to a subtitle line. */
     public static class PoolEntry {
         public final int originalIndex;
         public final String text;
+        public boolean used;
 
         public PoolEntry(int originalIndex, String text) {
             this.originalIndex = originalIndex;
             this.text = text;
+            this.used = false;
         }
     }
 
