@@ -1219,7 +1219,8 @@ public class LocalMediaActivity extends AppCompatActivity {
                 getString(R.string.option_edit_timestamp),
                 getString(R.string.option_delete),
                 getString(R.string.option_loop_this),
-                getString(R.string.option_set_range_start)
+                getString(R.string.option_set_range_start),
+                getString(R.string.option_set_range_end)
         };
         new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.line_options_title, position + 1))
@@ -1238,13 +1239,52 @@ public class LocalMediaActivity extends AppCompatActivity {
                             }
                             break;
                         case 5:
+                            // Mark this line as the start of a new range.
+                            // Reset the end so we don't accidentally re-use a
+                            // stale endpoint from a previous range.
+                            if (!line.hasTimestamp()) {
+                                Toast.makeText(this, R.string.line_no_timestamp,
+                                        Toast.LENGTH_SHORT).show();
+                                break;
+                            }
                             loopRangeStart = position;
+                            loopRangeEnd = -1;
                             Toast.makeText(this, getString(R.string.range_start_set, position + 1),
-                                    Toast.LENGTH_SHORT).show();
+                                    Toast.LENGTH_LONG).show();
+                            break;
+                        case 6:
+                            commitRangeEnd(position, line);
                             break;
                     }
                 })
                 .show();
+    }
+
+    /** Commits the second tap of a "long-press → loop range" gesture. The
+     *  user has already long-pressed line A and chosen "bắt đầu", which
+     *  stored {@code loopRangeStart}. Now they long-pressed line B and
+     *  chose "kết thúc"; we validate, swap if A is after B, and open the
+     *  loop-count picker. */
+    private void commitRangeEnd(int position, SubtitleLine endLine) {
+        if (loopRangeStart < 0 || loopRangeStart >= subtitleLines.size()) {
+            Toast.makeText(this, R.string.range_start_first, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!endLine.hasTimestamp()) {
+            Toast.makeText(this, R.string.line_no_timestamp, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SubtitleLine startLine = subtitleLines.get(loopRangeStart);
+        if (!startLine.hasTimestamp()) {
+            Toast.makeText(this, R.string.range_no_timestamp, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int from = loopRangeStart;
+        int to = position;
+        if (from > to) {
+            int tmp = from; from = to; to = tmp;
+        }
+        showLoopCountDialog(LoopMode.RANGE, from, to);
     }
 
     private void copyLineText(SubtitleLine line) {
@@ -1501,7 +1541,9 @@ public class LocalMediaActivity extends AppCompatActivity {
     // ======================== WAVE-TAP MODE ========================
 
     /** Routes a waveform tap (in ms) into the current Set-Start / Set-End
-     *  picker. Each tap overwrites the previously-picked value. */
+     *  picker. Each tap overwrites the previously-picked value, seeks the
+     *  player to that position, and starts playback so the user can audition
+     *  the spot before deciding whether the marker is on the right beat. */
     private void onWaveTap(int posMs) {
         if (mediaDuration <= 0) return;
         if (selectedLineIndex < 0 || selectedLineIndex >= subtitleLines.size()) {
@@ -1518,6 +1560,30 @@ public class LocalMediaActivity extends AppCompatActivity {
             waveformView.setEndMarker((float) posMs / mediaDuration);
             Toast.makeText(this, getString(R.string.wave_mode_end_at,
                     TimeFormatter.format(posMs)), Toast.LENGTH_SHORT).show();
+        } else {
+            return;
+        }
+        // Seek to the tapped position and resume playback so the user can
+        // hear what's at that spot. Clamp to known duration to avoid the
+        // MediaPlayer error that some devices throw at the very tail.
+        if (mediaPlayer != null) {
+            int seekTo = posMs;
+            if (mediaDuration > 0 && seekTo > mediaDuration - 50) {
+                seekTo = (int) Math.max(0, mediaDuration - 50);
+            }
+            try {
+                mediaPlayer.seekTo(seekTo);
+                if (!mediaPlayer.isPlaying()) {
+                    mediaPlayer.start();
+                    applyPlaybackSpeed();
+                    btnPlayPause.setImageResource(R.drawable.ic_pause);
+                }
+            } catch (IllegalStateException ignored) {}
+            // Update UI immediately so the seekbar / current-time / waveform
+            // progress reflect the tap even before the next 250ms tick.
+            seekBar.setProgress(seekTo);
+            tvCurrentTime.setText(TimeFormatter.format(seekTo));
+            waveformView.setProgress((float) seekTo / mediaDuration);
         }
     }
 

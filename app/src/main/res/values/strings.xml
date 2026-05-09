@@ -95,7 +95,8 @@
     <string name="option_edit_timestamp">Sửa thời gian</string>
     <string name="option_delete">Xóa dòng</string>
     <string name="option_loop_this">Lặp câu này</string>
-    <string name="option_set_range_start">Đặt làm đầu đoạn lặp</string>
+    <string name="option_set_range_start">Lặp đoạn — bắt đầu từ câu này</string>
+    <string name="option_set_range_end">Lặp đoạn — kết thúc tại câu này</string>
 
     <!-- Edit -->
     <string name="edit_text_title">Sửa nội dung sub</string>
@@ -103,7 +104,8 @@
     <string name="start_ms_label">Bắt đầu (ms):</string>
     <string name="end_ms_label">Kết thúc (ms):</string>
     <string name="delete_line_confirm">Xóa dòng sub này?</string>
-    <string name="range_start_set">Đã đặt câu %d làm đầu đoạn lặp</string>
+    <string name="range_start_set">Đã đặt câu %d làm đầu đoạn lặp. Nhấn giữ câu khác và chọn “kết thúc tại câu này” để chốt đoạn.</string>
+    <string name="range_start_first">Hãy nhấn giữ một câu khác và chọn “Lặp đoạn — bắt đầu từ câu này” trước.</string>
 
     <!-- Import/Export -->
     <string name="import_empty">File trống, không có dữ liệu</string>
